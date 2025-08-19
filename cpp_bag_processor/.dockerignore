@@ -1,0 +1,13 @@
+# Docker ignore file
+build/
+cpp_extracted_images/
+*.log
+.git/
+.gitignore
+
+# Keep only essential files for Docker build
+!bag_processor_docker.cpp
+!CMakeLists.docker.txt
+!docker-entrypoint.sh
+!Dockerfile
+!docker-*.sh

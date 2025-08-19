@@ -2,13 +2,15 @@
 #include <string>
 #include <vector>
 #include <map>
-#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <sstream>
 #include <iomanip>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 // ROS includes
+#include <ros/ros.h>
 #include <rosbag/bag.h>
 #include <rosbag/view.h>
 #include <sensor_msgs/Image.h>
@@ -17,6 +19,9 @@
 // OpenCV includes
 #include <opencv2/opencv.hpp>
 #include <opencv2/imgcodecs.hpp>
+
+// Boost for filesystem (C++14 compatible)
+#include <boost/filesystem.hpp>
 
 class BagProcessor {
 private:
@@ -32,6 +37,16 @@ private:
     std::vector<TopicInfo> image_topics_;
     std::map<std::string, std::string> topic_directories_;
     std::map<std::string, int> extraction_counts_;
+
+    // Helper function to replace filesystem functionality
+    bool file_exists(const std::string& path) {
+        struct stat buffer;
+        return (stat(path.c_str(), &buffer) == 0);
+    }
+
+    void create_directories(const std::string& path) {
+        boost::filesystem::create_directories(path);
+    }
 
 public:
     BagProcessor(const std::string& bag_path, const std::string& output_dir = "cpp_extracted_images") 
@@ -127,7 +142,7 @@ public:
         
         try {
             // Create main output directory
-            std::filesystem::create_directories(output_dir_);
+            create_directories(output_dir_);
             
             // Create directories for each image topic
             for (const auto& topic : image_topics_) {
@@ -142,7 +157,7 @@ public:
                 }
                 
                 std::string topic_dir = output_dir_ + "/" + dir_name;
-                std::filesystem::create_directories(topic_dir);
+                create_directories(topic_dir);
                 
                 topic_directories_[topic.topic_name] = topic_dir;
                 extraction_counts_[topic.topic_name] = 0;
@@ -324,12 +339,14 @@ int main(int argc, char** argv) {
     // Initialize ROS (required for rosbag)
     ros::init(argc, argv, "bag_processor");
 
-    std::string bag_file = "../../camera_data_2025-07-08-16-29-06_0.bag";
+    std::string bag_file = "/workspace/m2m/camera_data_2025-07-08-16-29-06_0.bag";
     std::string output_dir = "cpp_extracted_images";
 
     // Check if bag file exists
-    if (!std::filesystem::exists(bag_file)) {
+    struct stat buffer;
+    if (stat(bag_file.c_str(), &buffer) != 0) {
         std::cerr << "Error: Bag file not found: " << bag_file << std::endl;
+        std::cerr << "Current working directory: " << boost::filesystem::current_path() << std::endl;
         return 1;
     }
 
