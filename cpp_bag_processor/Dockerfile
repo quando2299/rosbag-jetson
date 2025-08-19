@@ -52,8 +52,8 @@ RUN /bin/bash -c "source /opt/ros/melodic/setup.bash"
 # Create build directory and build
 RUN mkdir -p build && cd build && \
     /bin/bash -c "source /opt/ros/melodic/setup.bash && \
-    cp ../CMakeLists.docker.txt CMakeLists.txt && \
-    cp ../bag_processor_docker.cpp bag_processor.cpp && \
+    cp ../CMakeLists.txt . && \
+    cp ../rosbag_analyzed.cpp . && \
     cmake . \
         -DCMAKE_CXX_STANDARD=14 \
         -DCMAKE_CXX_FLAGS='-pthread -std=c++14' \
@@ -68,4 +68,4 @@ COPY docker-entrypoint.sh /workspace/
 RUN chmod +x /workspace/docker-entrypoint.sh
 
 ENTRYPOINT ["/workspace/docker-entrypoint.sh"]
-CMD ["./bag_processor"]
+CMD ["./rosbag_analyzed"]

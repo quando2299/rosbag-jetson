@@ -49,7 +49,7 @@ private:
     }
 
 public:
-    BagProcessor(const std::string& bag_path, const std::string& output_dir = "cpp_extracted_images") 
+    BagProcessor(const std::string& bag_path, const std::string& output_dir = "extracted_images") 
         : bag_path_(bag_path), output_dir_(output_dir) {}
 
     bool analyzeBag() {
@@ -339,14 +339,38 @@ int main(int argc, char** argv) {
     // Initialize ROS (required for rosbag)
     ros::init(argc, argv, "bag_processor");
 
-    std::string bag_file = "/workspace/m2m/camera_data_2025-07-08-16-29-06_0.bag";
-    std::string output_dir = "cpp_extracted_images";
+    std::string bag_file;
+    std::string output_dir = "extracted_images";
 
-    // Check if bag file exists
-    struct stat buffer;
-    if (stat(bag_file.c_str(), &buffer) != 0) {
-        std::cerr << "Error: Bag file not found: " << bag_file << std::endl;
-        std::cerr << "Current working directory: " << boost::filesystem::current_path() << std::endl;
+    // Auto-find bag file in /workspace/jetson/ directory
+    boost::filesystem::path jetson_dir("/workspace/jetson");
+    bool found = false;
+    
+    try {
+        if (boost::filesystem::exists(jetson_dir) && boost::filesystem::is_directory(jetson_dir)) {
+            for (auto& file : boost::filesystem::directory_iterator(jetson_dir)) {
+                if (file.path().extension() == ".bag") {
+                    bag_file = file.path().string();
+                    found = true;
+                    std::cout << "🔍 Found bag file: " << bag_file << std::endl;
+                    break;
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Error searching for bag files: " << e.what() << std::endl;
+    }
+
+    if (!found) {
+        std::cerr << "❌ Error: No .bag file found in /workspace/jetson/" << std::endl;
+        std::cerr << "Available files:" << std::endl;
+        try {
+            for (auto& file : boost::filesystem::directory_iterator(jetson_dir)) {
+                std::cerr << "  " << file.path().filename() << std::endl;
+            }
+        } catch (...) {
+            std::cerr << "Could not list directory contents" << std::endl;
+        }
         return 1;
     }
 

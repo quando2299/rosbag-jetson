@@ -14,21 +14,23 @@ fi
 CURRENT_DIR=$(pwd)
 echo "Current directory: $CURRENT_DIR"
 
-# Find the m2m directory (should be 2 levels up)
-M2M_DIR=$(realpath "$CURRENT_DIR/../..")
-echo "M2M directory: $M2M_DIR"
+# Find the jetson directory (should be 1 level up)
+JETSON_DIR=$(realpath "$CURRENT_DIR/..")
+echo "Jetson directory: $JETSON_DIR"
 
-# Check if bag file exists
-BAG_FILE="$M2M_DIR/camera_data_2025-07-08-16-29-06_0.bag"
-if [ ! -f "$BAG_FILE" ]; then
-    echo "❌ Bag file not found at: $BAG_FILE"
+# Check if any bag file exists in jetson directory
+BAG_FILE=$(find "$JETSON_DIR" -name "*.bag" -type f | head -1)
+if [ -z "$BAG_FILE" ]; then
+    echo "❌ No .bag file found in: $JETSON_DIR"
     echo ""
-    echo "Please ensure the bag file is in the correct location:"
-    echo "  m2m/"
-    echo "  ├── camera_data_2025-07-08-16-29-06_0.bag  ← Should be here"
-    echo "  └── jetson/"
-    echo "      └── cpp_bag_processor/"
-    echo "          └── docker-run.sh  ← You are here"
+    echo "Available files in jetson directory:"
+    ls -la "$JETSON_DIR" 2>/dev/null || echo "Directory not accessible"
+    echo ""
+    echo "Please place any .bag file in the jetson directory:"
+    echo "  jetson/"
+    echo "  ├── your_bag_file.bag  ← Place any .bag file here"
+    echo "  └── cpp_bag_processor/"
+    echo "      └── docker-run.sh  ← You are here"
     exit 1
 fi
 
@@ -36,20 +38,20 @@ echo "✅ Found bag file: $BAG_FILE"
 echo "File size: $(du -h "$BAG_FILE" | cut -f1)"
 
 # Create output directory on host
-OUTPUT_DIR="$CURRENT_DIR/cpp_extracted_images"
+OUTPUT_DIR="$CURRENT_DIR/extracted_images"
 mkdir -p "$OUTPUT_DIR"
 echo "Output directory: $OUTPUT_DIR"
 
 # Run the Docker container
 echo ""
 echo "🚀 Starting Docker container..."
-echo "This will mount the m2m directory and extract images..."
+echo "This will mount the jetson directory and extract images..."
 
 docker run \
     --rm \
     --platform linux/$(uname -m | sed 's/x86_64/amd64/') \
-    -v "$M2M_DIR:/workspace/m2m" \
-    -v "$OUTPUT_DIR:/workspace/build/cpp_extracted_images" \
+    -v "$JETSON_DIR:/workspace/jetson" \
+    -v "$OUTPUT_DIR:/workspace/build/extracted_images" \
     -w /workspace/build \
     bag-processor:latest
 

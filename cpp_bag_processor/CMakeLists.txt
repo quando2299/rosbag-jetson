@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(bag_processor)
+project(rosbag_analyzed)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 14)
@@ -29,10 +29,10 @@ include_directories(
 )
 
 # Add executable with ROS support
-add_executable(bag_processor bag_processor.cpp)
+add_executable(rosbag_analyzed rosbag_analyzed.cpp)
 
 # Link ROS libraries
-target_link_libraries(bag_processor
+target_link_libraries(rosbag_analyzed
     ${catkin_LIBRARIES}
     ${OpenCV_LIBS}
     ${Boost_LIBRARIES}
@@ -40,6 +40,6 @@ target_link_libraries(bag_processor
 )
 
 # Define ROS compilation flag
-target_compile_definitions(bag_processor PRIVATE HAVE_ROS=1)
+target_compile_definitions(rosbag_analyzed PRIVATE HAVE_ROS=1)
 
 # No install needed for Docker build
