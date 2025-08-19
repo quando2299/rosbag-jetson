@@ -66,7 +66,7 @@ cmake .. -DUSE_ROS=ON
 
 # Build
 echo "Building..."
-make -j$(nproc)
+make -j$(nproc) VERBOSE=1
 
 if [ $? -eq 0 ]; then
     echo "✅ Build successful!"

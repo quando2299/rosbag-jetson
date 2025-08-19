@@ -2,8 +2,13 @@ cmake_minimum_required(VERSION 3.10)
 project(bag_processor)
 
 # Set C++ standard
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Add pthread support
+set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
+set(THREADS_PREFER_PTHREAD_FLAG TRUE)
+find_package(Threads REQUIRED)
 
 # Option to build with or without ROS
 option(USE_ROS "Build with ROS support" ON)
@@ -18,7 +23,7 @@ if(USE_ROS)
     )
     
     find_package(OpenCV REQUIRED)
-    find_package(Boost REQUIRED COMPONENTS system filesystem)
+    find_package(Boost REQUIRED COMPONENTS system filesystem thread)
     
     # Include directories
     include_directories(
@@ -35,6 +40,7 @@ if(USE_ROS)
         ${catkin_LIBRARIES}
         ${OpenCV_LIBS}
         ${Boost_LIBRARIES}
+        Threads::Threads
     )
     
     # Define ROS compilation flag
@@ -48,16 +54,20 @@ if(USE_ROS)
 else()
     # Standalone build without ROS
     find_package(OpenCV)
+    
+    # Add standalone executable
+    add_executable(bag_processor standalone_bag_processor.cpp)
+    
     if(OpenCV_FOUND)
         target_compile_definitions(bag_processor PRIVATE HAVE_OPENCV=1)
         target_link_libraries(bag_processor ${OpenCV_LIBS})
         include_directories(${OpenCV_INCLUDE_DIRS})
     endif()
     
-    # Add standalone executable
-    add_executable(bag_processor standalone_bag_processor.cpp)
+    target_link_libraries(bag_processor Threads::Threads)
     
 endif()
 
 # Also build standalone version always
 add_executable(standalone_bag_processor standalone_bag_processor.cpp)
+target_link_libraries(standalone_bag_processor Threads::Threads)
