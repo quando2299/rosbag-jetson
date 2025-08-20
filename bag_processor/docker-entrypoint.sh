@@ -37,7 +37,7 @@ echo ""
 echo "🚀 Starting bag processing..."
 echo "This will:"
 echo "  1. Analyze the bag file structure"
-echo "  2. Extract all images to extracted_images/"
+echo "  2. Extract all images to timestamped folder extracted_images_YYYYMMDD_HHMMSS/"
 echo "  3. Organize by camera topic"
 echo ""
 

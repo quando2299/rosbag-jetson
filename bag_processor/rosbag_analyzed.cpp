@@ -8,6 +8,8 @@
 #include <iomanip>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <chrono>
+#include <ctime>
 
 // ROS includes
 #include <ros/ros.h>
@@ -22,6 +24,16 @@
 
 // Boost for filesystem (C++14 compatible)
 #include <boost/filesystem.hpp>
+
+// Helper function to generate timestamp string
+std::string generate_timestamp() {
+    auto now = std::chrono::system_clock::now();
+    auto time_t = std::chrono::system_clock::to_time_t(now);
+    
+    std::stringstream ss;
+    ss << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S");
+    return ss.str();
+}
 
 class BagProcessor {
 private:
@@ -340,7 +352,8 @@ int main(int argc, char** argv) {
     ros::init(argc, argv, "bag_processor");
 
     std::string bag_file;
-    std::string output_dir = "extracted_images";
+    std::string timestamp = generate_timestamp();
+    std::string output_dir = "output/extracted_images_" + timestamp;
 
     // Auto-find bag file in /workspace/jetson/ directory
     boost::filesystem::path jetson_dir("/workspace/jetson");

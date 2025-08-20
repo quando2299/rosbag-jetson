@@ -6,7 +6,7 @@ Cross-platform Docker solution for analyzing and extracting images from ROS bag 
 
 ### 1. Build the Docker Image
 ```bash
-cd cpp_bag_processor
+cd bag_processor
 ./docker-build.sh
 ```
 
@@ -28,7 +28,7 @@ cd cpp_bag_processor
 m2m/
 ├── camera_data_2025-07-08-16-29-06_0.bag  ← Your bag file
 └── jetson/
-    └── cpp_bag_processor/
+    └── bag_processor/
         ├── docker-build.sh  ← Build script
         ├── docker-run.sh    ← Run script
         └── Dockerfile       ← Container definition
@@ -37,7 +37,7 @@ m2m/
 ## Output Structure
 
 ```
-cpp_bag_processor/
+bag_processor/
 └── cpp_extracted_images/
     ├── flir_id8_image_resized/     (438 images)
     ├── leopard_id1_image_resized/  (438 images)

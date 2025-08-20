@@ -22,7 +22,8 @@ private:
     struct mosquitto *mosq;
     std::string host;
     int port;
-    std::string topic;
+    std::string connection_topic;
+    std::string robot_control_topic;
     
     static void on_connect_callback(struct mosquitto *mosq, void *userdata, int result) {
         MQTTClient *client = static_cast<MQTTClient*>(userdata);
@@ -44,15 +45,46 @@ private:
         client->on_subscribe(mid, qos_count, granted_qos);
     }
     
+    // Extract peerId from robot-control topic pattern: <thingname>/robot-control/+/offer
+    std::string extract_peer_id(const std::string& topic) {
+        // Find "robot-control/" in the topic
+        size_t start = topic.find("/robot-control/");
+        if (start == std::string::npos) {
+            return "";
+        }
+        
+        start += 15; // Length of "/robot-control/"
+        
+        // Find the next "/" after robot-control/
+        size_t end = topic.find("/", start);
+        if (end == std::string::npos) {
+            return "";
+        }
+        
+        // Extract peerId between robot-control/ and /offer
+        return topic.substr(start, end - start);
+    }
+    
     void on_connect(int result) {
         if (result == 0) {
             std::cout << "Connected to MQTT broker at " << host << ":" << port << std::endl;
-            std::cout << "Attempting to subscribe to topic: " << topic << std::endl;
-            int ret = mosquitto_subscribe(mosq, nullptr, topic.c_str(), 0);
-            if (ret == MOSQ_ERR_SUCCESS) {
-                std::cout << "Subscribed to topic: " << topic << std::endl;
+            
+            // Subscribe to connection topic
+            std::cout << "Attempting to subscribe to topic: " << connection_topic << std::endl;
+            int ret1 = mosquitto_subscribe(mosq, nullptr, connection_topic.c_str(), 0);
+            if (ret1 == MOSQ_ERR_SUCCESS) {
+                std::cout << "Subscribed to connection topic: " << connection_topic << std::endl;
             } else {
-                std::cerr << "Failed to subscribe to topic. Error: " << ret << " (" << mosquitto_strerror(ret) << ")" << std::endl;
+                std::cerr << "Failed to subscribe to connection topic. Error: " << ret1 << " (" << mosquitto_strerror(ret1) << ")" << std::endl;
+            }
+            
+            // Subscribe to robot-control topic
+            std::cout << "Attempting to subscribe to topic: " << robot_control_topic << std::endl;
+            int ret2 = mosquitto_subscribe(mosq, nullptr, robot_control_topic.c_str(), 0);
+            if (ret2 == MOSQ_ERR_SUCCESS) {
+                std::cout << "Subscribed to robot-control topic: " << robot_control_topic << std::endl;
+            } else {
+                std::cerr << "Failed to subscribe to robot-control topic. Error: " << ret2 << " (" << mosquitto_strerror(ret2) << ")" << std::endl;
             }
         } else {
             std::cerr << "Failed to connect to MQTT broker. Return code: " << result << std::endl;
@@ -62,13 +94,23 @@ private:
     
     void on_message(const struct mosquitto_message *message) {
         std::cout.flush();
-        std::cerr << "DEBUG: Message received callback triggered!" << std::endl;
         
         auto now = std::chrono::system_clock::now();
         auto time_t = std::chrono::system_clock::to_time_t(now);
+        std::string topic_str = message->topic;
         
         std::cout << "[" << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S")
-                  << "] Received message on '" << message->topic << "':" << std::endl;
+                  << "] Received message on '" << topic_str << "':" << std::endl;
+        
+        // Check if this is a robot-control offer topic and extract peerId
+        if (topic_str.find("/robot-control/") != std::string::npos && topic_str.find("/offer") != std::string::npos) {
+            std::string peer_id = extract_peer_id(topic_str);
+            if (!peer_id.empty()) {
+                std::cout << "🤖 ROBOT-CONTROL OFFER - Extracted peerId: " << peer_id << std::endl;
+            } else {
+                std::cout << "⚠️  Could not extract peerId from topic" << std::endl;
+            }
+        }
         
         if (message->payload && message->payloadlen > 0) {
             std::string payload(static_cast<char*>(message->payload), message->payloadlen);
@@ -95,7 +137,9 @@ private:
     
 public:
     MQTTClient(const std::string& host = "rmcs.d6-vnext.com", int port = 1883) 
-        : host(host), port(port), topic("vnext-test_b6239876-943a-4d6f-a7ef-f1440d5c58af/connection") {
+        : host(host), port(port), 
+          connection_topic("vnext-test_b6239876-943a-4d6f-a7ef-f1440d5c58af/connection"),
+          robot_control_topic("vnext-test_b6239876-943a-4d6f-a7ef-f1440d5c58af/robot-control/+/offer") {
         mosquitto_lib_init();
         mosq = mosquitto_new("m2m-robot-001", true, this);
         
