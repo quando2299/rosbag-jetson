@@ -96,7 +96,7 @@ private:
     
     // Publish answer message to <thingname>/<peerId>/answer topic (legacy method)
     void publish_answer(const std::string& peer_id) {
-        std::string answer_topic = thing_name + "/" + peer_id + "/answer";
+        std::string answer_topic = thing_name + "/" + "robot-control/"  + peer_id + "/answer";
         std::string answer_message = "{\"connected\": true}";
         publish_message(answer_topic, answer_message);
     }

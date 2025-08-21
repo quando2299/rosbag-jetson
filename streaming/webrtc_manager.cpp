@@ -93,7 +93,7 @@ void WebRTCManager::setupICEHandling(const std::string& peer_id, std::shared_ptr
         std::cout << "📤 Local description ready for " << peer_id << std::endl;
         
         // Publish answer to MQTT
-        std::string answer_topic = thing_name_ + "/" + peer_id + "/answer";
+        std::string answer_topic = thing_name_ + "/robot-control/" + peer_id + "/answer";
         
         // Publish raw SDP answer (to match the format from response.md)
         std::string sdp_answer = description;
@@ -159,7 +159,7 @@ bool MockWebRTCManager::handleOffer(const std::string& peer_id, const std::strin
     std::cout << "🤖 MOCK: Handling offer for peer " << peer_id << std::endl;
     
     // Send mock answer
-    std::string answer_topic = thing_name_ + "/" + peer_id + "/answer";
+    std::string answer_topic = thing_name_ + "/robot-control/" + peer_id + "/answer";
     std::string mock_answer = "{\"connected\": true, \"mock\": true, \"message\": \"WebRTC not available\"}";
     
     if (publish_callback_) {
