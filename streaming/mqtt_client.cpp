@@ -6,7 +6,14 @@
 #include <iomanip>
 #include <sstream>
 #include <signal.h>
+#include <memory>
 #include <mosquitto.h>
+
+#ifdef JSON_ENABLED
+#include <json/json.h>
+#endif
+
+#include "webrtc_manager.hpp"
 
 // Global variables for signal handling
 static volatile bool keep_running = true;
@@ -24,6 +31,13 @@ private:
     int port;
     std::string connection_topic;
     std::string robot_control_topic;
+    std::string thing_name;
+    
+#ifdef WEBRTC_ENABLED
+    std::unique_ptr<WebRTCManager> webrtc_manager;
+#else
+    std::unique_ptr<MockWebRTCManager> webrtc_manager;
+#endif
     
     static void on_connect_callback(struct mosquitto *mosq, void *userdata, int result) {
         MQTTClient *client = static_cast<MQTTClient*>(userdata);
@@ -63,6 +77,28 @@ private:
         
         // Extract peerId between robot-control/ and /offer
         return topic.substr(start, end - start);
+    }
+    
+    // Generic method to publish MQTT messages
+    void publish_message(const std::string& topic, const std::string& message) {
+        std::cout << "📡 Publishing to topic: " << topic << std::endl;
+        
+        int ret = mosquitto_publish(mosq, nullptr, topic.c_str(), 
+                                  message.length(), message.c_str(), 
+                                  0, false);
+        
+        if (ret == MOSQ_ERR_SUCCESS) {
+            std::cout << "✅ Message published successfully" << std::endl;
+        } else {
+            std::cerr << "❌ Failed to publish message. Error: " << ret << " (" << mosquitto_strerror(ret) << ")" << std::endl;
+        }
+    }
+    
+    // Publish answer message to <thingname>/<peerId>/answer topic (legacy method)
+    void publish_answer(const std::string& peer_id) {
+        std::string answer_topic = thing_name + "/" + peer_id + "/answer";
+        std::string answer_message = "{\"connected\": true}";
+        publish_message(answer_topic, answer_message);
     }
     
     void on_connect(int result) {
@@ -107,6 +143,63 @@ private:
             std::string peer_id = extract_peer_id(topic_str);
             if (!peer_id.empty()) {
                 std::cout << "🤖 ROBOT-CONTROL OFFER - Extracted peerId: " << peer_id << std::endl;
+                
+                // Parse the offer payload (supports both JSON and raw SDP)
+                if (message->payload && message->payloadlen > 0) {
+                    std::string payload(static_cast<char*>(message->payload), message->payloadlen);
+                    std::string offer_sdp;
+                    
+                    try {
+                        // Check if payload is JSON or raw SDP
+                        if (payload[0] == '{') {
+#ifdef JSON_ENABLED
+                            // Parse JSON to extract SDP offer
+                            Json::Value root;
+                            Json::Reader reader;
+                            
+                            if (reader.parse(payload, root)) {
+                                if (root.isMember("sdp")) {
+                                    offer_sdp = root["sdp"].asString();
+                                    std::cout << "📥 Received JSON SDP offer for peer " << peer_id << std::endl;
+                                } else {
+                                    std::cout << "⚠️  No SDP found in JSON payload" << std::endl;
+                                    publish_answer(peer_id);
+                                    return;
+                                }
+                            } else {
+                                std::cout << "⚠️  Invalid JSON in offer payload" << std::endl;
+                                publish_answer(peer_id);
+                                return;
+                            }
+#else
+                            std::cout << "⚠️  JSON parsing disabled - treating as raw SDP" << std::endl;
+                            offer_sdp = payload;
+#endif
+                        } else {
+                            // Treat as raw SDP (like in response.md)
+                            offer_sdp = payload;
+                            std::cout << "📥 Received raw SDP offer for peer " << peer_id << std::endl;
+                        }
+                        
+                        // Use WebRTC manager to handle the offer
+                        if (webrtc_manager && webrtc_manager->handleOffer(peer_id, offer_sdp)) {
+                            std::cout << "✅ WebRTC offer handled successfully for " << peer_id << std::endl;
+                        } else {
+                            std::cout << "⚠️  WebRTC offer handling failed for " << peer_id << std::endl;
+                            // Fallback to simple answer
+                            publish_answer(peer_id);
+                        }
+                        
+                    } catch (const std::exception& e) {
+                        std::cerr << "❌ Error parsing offer: " << e.what() << std::endl;
+                        // Fallback to simple answer
+                        publish_answer(peer_id);
+                    }
+                } else {
+                    std::cout << "⚠️  Empty offer payload" << std::endl;
+                    // Fallback to simple answer
+                    publish_answer(peer_id);
+                }
             } else {
                 std::cout << "⚠️  Could not extract peerId from topic" << std::endl;
             }
@@ -136,10 +229,11 @@ private:
     }
     
 public:
-    MQTTClient(const std::string& host = "rmcs.d6-vnext.com", int port = 1883) 
+    MQTTClient(const std::string& host = "test.rmcs.d6-vnext.com", int port = 1883) 
         : host(host), port(port), 
           connection_topic("vnext-test_b6239876-943a-4d6f-a7ef-f1440d5c58af/connection"),
-          robot_control_topic("vnext-test_b6239876-943a-4d6f-a7ef-f1440d5c58af/robot-control/+/offer") {
+          robot_control_topic("vnext-test_b6239876-943a-4d6f-a7ef-f1440d5c58af/robot-control/+/offer"),
+          thing_name("vnext-test_b6239876-943a-4d6f-a7ef-f1440d5c58af") {
         mosquitto_lib_init();
         mosq = mosquitto_new("m2m-robot-001", true, this);
         
@@ -153,10 +247,21 @@ public:
         mosquitto_subscribe_callback_set(mosq, on_subscribe_callback);
         
         // Set authentication
-        int auth_ret = mosquitto_username_pw_set(mosq, "0f5c126f-e339-4f99-a8a0-4b4fe29944f0", "!1l!YC1#");
+        int auth_ret = mosquitto_username_pw_set(mosq, "vnext-test_b6239876-943a-4d6f-a7ef-f1440d5c58af", "7#TlDprf");
         if (auth_ret != MOSQ_ERR_SUCCESS) {
             throw std::runtime_error("Failed to set MQTT credentials");
         }
+        
+        // Initialize WebRTC manager with publish callback
+        auto publish_cb = [this](const std::string& topic, const std::string& message) {
+            this->publish_message(topic, message);
+        };
+        
+#ifdef WEBRTC_ENABLED
+        webrtc_manager = std::make_unique<WebRTCManager>(thing_name, publish_cb);
+#else
+        webrtc_manager = std::make_unique<MockWebRTCManager>(thing_name, publish_cb);
+#endif
     }
     
     ~MQTTClient() {

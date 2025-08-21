@@ -17,17 +17,36 @@ RUN apt-get update && apt-get install -y \
     libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install MQTT dependencies
+# Install MQTT and JSON dependencies
 RUN apt-get update && apt-get install -y \
     libmosquitto-dev \
     mosquitto-clients \
+    libjsoncpp-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Install WebRTC dependencies (libdatachannel)
+RUN apt-get update && apt-get install -y \
+    libssl-dev \
+    libnice-dev \
+    libsrtp2-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build and install libdatachannel from source (lightweight WebRTC library)
+RUN git clone --depth 1 --branch v0.20.0 https://github.com/paullouisageneau/libdatachannel.git /tmp/libdatachannel && \
+    cd /tmp/libdatachannel && \
+    git submodule update --init --recursive && \
+    mkdir build && cd build && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release -DNO_EXAMPLES=1 -DNO_TESTS=1 && \
+    make -j$(nproc) && \
+    make install && \
+    ldconfig && \
+    rm -rf /tmp/libdatachannel
 
 # Set working directory
 WORKDIR /workspace
 
 # Copy source code
-COPY mqtt_client.cpp CMakeLists.txt ./
+COPY mqtt_client.cpp CMakeLists.txt webrtc_manager.hpp webrtc_manager.cpp ./
 
 # Create build directory and build
 RUN mkdir -p build && cd build && \
