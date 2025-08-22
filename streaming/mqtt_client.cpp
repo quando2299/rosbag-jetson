@@ -29,8 +29,8 @@ private:
     struct mosquitto *mosq;
     std::string host;
     int port;
-    std::string connection_topic;
     std::string robot_control_topic;
+    std::string candidate_topic;
     std::string thing_name;
     
 #ifdef WEBRTC_ENABLED
@@ -105,22 +105,22 @@ private:
         if (result == 0) {
             std::cout << "Connected to MQTT broker at " << host << ":" << port << std::endl;
             
-            // Subscribe to connection topic
-            std::cout << "Attempting to subscribe to topic: " << connection_topic << std::endl;
-            int ret1 = mosquitto_subscribe(mosq, nullptr, connection_topic.c_str(), 0);
-            if (ret1 == MOSQ_ERR_SUCCESS) {
-                std::cout << "Subscribed to connection topic: " << connection_topic << std::endl;
-            } else {
-                std::cerr << "Failed to subscribe to connection topic. Error: " << ret1 << " (" << mosquitto_strerror(ret1) << ")" << std::endl;
-            }
-            
-            // Subscribe to robot-control topic
+            // Subscribe to robot-control offer topic
             std::cout << "Attempting to subscribe to topic: " << robot_control_topic << std::endl;
-            int ret2 = mosquitto_subscribe(mosq, nullptr, robot_control_topic.c_str(), 0);
-            if (ret2 == MOSQ_ERR_SUCCESS) {
+            int ret1 = mosquitto_subscribe(mosq, nullptr, robot_control_topic.c_str(), 0);
+            if (ret1 == MOSQ_ERR_SUCCESS) {
                 std::cout << "Subscribed to robot-control topic: " << robot_control_topic << std::endl;
             } else {
-                std::cerr << "Failed to subscribe to robot-control topic. Error: " << ret2 << " (" << mosquitto_strerror(ret2) << ")" << std::endl;
+                std::cerr << "Failed to subscribe to robot-control topic. Error: " << ret1 << " (" << mosquitto_strerror(ret1) << ")" << std::endl;
+            }
+            
+            // Subscribe to candidate topic
+            std::cout << "Attempting to subscribe to topic: " << candidate_topic << std::endl;
+            int ret2 = mosquitto_subscribe(mosq, nullptr, candidate_topic.c_str(), 0);
+            if (ret2 == MOSQ_ERR_SUCCESS) {
+                std::cout << "Subscribed to candidate topic: " << candidate_topic << std::endl;
+            } else {
+                std::cerr << "Failed to subscribe to candidate topic. Error: " << ret2 << " (" << mosquitto_strerror(ret2) << ")" << std::endl;
             }
         } else {
             std::cerr << "Failed to connect to MQTT broker. Return code: " << result << std::endl;
@@ -184,6 +184,16 @@ private:
                         // Use WebRTC manager to handle the offer
                         if (webrtc_manager && webrtc_manager->handleOffer(peer_id, offer_sdp)) {
                             std::cout << "✅ WebRTC offer handled successfully for " << peer_id << std::endl;
+                            
+                            // Start live image streaming from directory
+                            std::string images_dir = "images/flir_id8_image_resized";
+                            
+                            std::cout << "🎥 Starting live image streaming from: " << images_dir << std::endl;
+                            if (webrtc_manager->startVideoStreaming(peer_id, images_dir)) {
+                                std::cout << "✅ Video streaming started for " << peer_id << std::endl;
+                            } else {
+                                std::cout << "⚠️  Failed to start video streaming for " << peer_id << std::endl;
+                            }
                         } else {
                             std::cout << "⚠️  WebRTC offer handling failed for " << peer_id << std::endl;
                             // Fallback to simple answer
@@ -202,6 +212,46 @@ private:
                 }
             } else {
                 std::cout << "⚠️  Could not extract peerId from topic" << std::endl;
+            }
+        }
+        // Check if this is a candidate/robot topic for ICE candidates
+        else if (topic_str.find("/robot-control/") != std::string::npos && topic_str.find("/candidate/robot") != std::string::npos) {
+            std::string peer_id = extract_peer_id(topic_str);
+            if (!peer_id.empty()) {
+                std::cout << "🧊 ICE CANDIDATES - Received for peerId: " << peer_id << std::endl;
+                
+                // Parse the ICE candidates JSON array
+                if (message->payload && message->payloadlen > 0) {
+                    std::string payload(static_cast<char*>(message->payload), message->payloadlen);
+                    
+                    try {
+#ifdef JSON_ENABLED
+                        Json::Value candidates;
+                        Json::Reader reader;
+                        
+                        if (reader.parse(payload, candidates) && candidates.isArray()) {
+                            std::cout << "📥 Received " << candidates.size() << " ICE candidates for peer " << peer_id << std::endl;
+                            
+                            // Pass candidates to WebRTC manager
+                            if (webrtc_manager && webrtc_manager->handleCandidates(peer_id, candidates)) {
+                                std::cout << "✅ ICE candidates handled successfully for " << peer_id << std::endl;
+                            } else {
+                                std::cout << "⚠️  ICE candidates handling failed for " << peer_id << std::endl;
+                            }
+                        } else {
+                            std::cout << "⚠️  Invalid JSON array in candidates payload" << std::endl;
+                        }
+#else
+                        std::cout << "⚠️  JSON parsing disabled - cannot handle ICE candidates" << std::endl;
+#endif
+                    } catch (const std::exception& e) {
+                        std::cerr << "❌ Error parsing ICE candidates: " << e.what() << std::endl;
+                    }
+                } else {
+                    std::cout << "⚠️  Empty candidates payload" << std::endl;
+                }
+            } else {
+                std::cout << "⚠️  Could not extract peerId from candidate topic" << std::endl;
             }
         }
         
@@ -231,8 +281,8 @@ private:
 public:
     MQTTClient(const std::string& host = "test.rmcs.d6-vnext.com", int port = 1883) 
         : host(host), port(port), 
-          connection_topic("vnext-test_b6239876-943a-4d6f-a7ef-f1440d5c58af/connection"),
           robot_control_topic("vnext-test_b6239876-943a-4d6f-a7ef-f1440d5c58af/robot-control/+/offer"),
+          candidate_topic("vnext-test_b6239876-943a-4d6f-a7ef-f1440d5c58af/robot-control/+/candidate/robot"),
           thing_name("vnext-test_b6239876-943a-4d6f-a7ef-f1440d5c58af") {
         mosquitto_lib_init();
         mosq = mosquitto_new("m2m-robot-001", true, this);

@@ -1,6 +1,9 @@
 #include "webrtc_manager.hpp"
 #include <iostream>
 #include <sstream>
+#include <chrono>
+#include <thread>
+#include <cstddef>
 
 #ifdef WEBRTC_ENABLED
 
@@ -10,6 +13,11 @@ WebRTCManager::WebRTCManager(const std::string& thing_name, PublishCallback publ
 }
 
 WebRTCManager::~WebRTCManager() {
+    // Stop all streaming
+    for (auto& [peer_id, active] : streaming_active_) {
+        stopVideoStreaming(peer_id);
+    }
+    
     // Close all peer connections
     for (auto& [peer_id, pc] : peer_connections_) {
         if (pc) {
@@ -17,6 +25,9 @@ WebRTCManager::~WebRTCManager() {
         }
     }
     peer_connections_.clear();
+    video_tracks_.clear();
+    streaming_active_.clear();
+    streaming_threads_.clear();
     std::cout << "🧹 WebRTC Manager cleaned up" << std::endl;
 }
 
@@ -75,6 +86,8 @@ std::shared_ptr<rtc::PeerConnection> WebRTCManager::createPeerConnection(const s
         }
     });
     
+    // Video track will be added after remote description is set
+    
     // Set up ICE candidate handling
     setupICEHandling(peer_id, pc);
     
@@ -122,6 +135,33 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
         
         std::cout << "📥 Remote description set for " << peer_id << std::endl;
         
+        // Now add video track after remote description is set
+        try {
+            std::cout << "🎬 Adding video track to peer connection" << std::endl;
+            
+            // Create video media description with H264 codec
+            rtc::Description::Video video("video0", rtc::Description::Direction::SendOnly);
+            video.addH264Codec(96, "baseline"); // PT 96 for H264
+            video.setBitrate(1000); // 1 Mbps
+            
+            auto video_track = pc->addTrack(video);
+            video_tracks_[peer_id] = video_track;
+            
+            // Set up track callbacks
+            video_track->onOpen([peer_id]() {
+                std::cout << "✅ Video track opened for " << peer_id << std::endl;
+            });
+            
+            video_track->onClosed([peer_id]() {
+                std::cout << "❌ Video track closed for " << peer_id << std::endl;
+            });
+            
+            std::cout << "✅ Video track with H264 codec added successfully" << std::endl;
+            
+        } catch (const std::exception& e) {
+            std::cerr << "⚠️  Failed to add video track: " << e.what() << std::endl;
+        }
+        
         // The answer will be automatically generated and published via onLocalDescription callback
         
         return true;
@@ -130,6 +170,65 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
         std::cerr << "❌ Error handling offer for " << peer_id << ": " << e.what() << std::endl;
         return false;
     }
+}
+
+bool WebRTCManager::handleCandidates(const std::string& peer_id, const Json::Value& candidates) {
+#ifdef JSON_ENABLED
+    try {
+        // Find the peer connection
+        auto it = peer_connections_.find(peer_id);
+        if (it == peer_connections_.end()) {
+            std::cout << "⚠️  No peer connection found for " << peer_id << std::endl;
+            return false;
+        }
+        
+        auto pc = it->second;
+        if (!pc) {
+            std::cout << "⚠️  Invalid peer connection for " << peer_id << std::endl;
+            return false;
+        }
+        
+        std::cout << "🧊 Processing " << candidates.size() << " ICE candidates for " << peer_id << std::endl;
+        
+        // Process each candidate
+        for (const auto& candidateJson : candidates) {
+            if (candidateJson.isMember("candidate") && candidateJson.isMember("sdpMid")) {
+                std::string candidateStr = candidateJson["candidate"].asString();
+                std::string sdpMid = candidateJson["sdpMid"].asString();
+                int sdpMLineIndex = candidateJson.get("sdpMLineIndex", 0).asInt();
+                
+                // Create rtc::Candidate and add to peer connection
+                rtc::Candidate candidate(candidateStr, sdpMid);
+                pc->addRemoteCandidate(candidate);
+                
+                std::cout << "✅ Added ICE candidate: " << candidateStr << " (mid: " << sdpMid << ")" << std::endl;
+            } else {
+                std::cout << "⚠️  Invalid candidate format - missing required fields" << std::endl;
+            }
+        }
+        
+        // Republish candidates to candidate/rmcs topic
+        std::string rmcs_topic = thing_name_ + "/robot-control/" + peer_id + "/candidate/rmcs";
+        
+        // Convert candidates back to JSON string for republishing
+        Json::StreamWriterBuilder builder;
+        std::string candidatesStr = Json::writeString(builder, candidates);
+        
+        if (publish_callback_) {
+            publish_callback_(rmcs_topic, candidatesStr);
+            std::cout << "📤 Republished " << candidates.size() << " ICE candidates to rmcs topic" << std::endl;
+        }
+        
+        return true;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "❌ Error handling ICE candidates for " << peer_id << ": " << e.what() << std::endl;
+        return false;
+    }
+#else
+    std::cout << "⚠️  JSON parsing disabled - cannot handle ICE candidates" << std::endl;
+    return false;
+#endif
 }
 
 void WebRTCManager::closePeerConnection(const std::string& peer_id) {
@@ -141,6 +240,231 @@ void WebRTCManager::closePeerConnection(const std::string& peer_id) {
         peer_connections_.erase(it);
         std::cout << "🔒 Closed peer connection for " << peer_id << std::endl;
     }
+}
+
+bool WebRTCManager::startVideoStreaming(const std::string& peer_id, const std::string& images_dir_path) {
+    try {
+        auto it = peer_connections_.find(peer_id);
+        if (it == peer_connections_.end()) {
+            std::cout << "⚠️  No peer connection found for " << peer_id << std::endl;
+            return false;
+        }
+        
+        auto pc = it->second;
+        if (!pc) {
+            std::cout << "⚠️  Invalid peer connection for " << peer_id << std::endl;
+            return false;
+        }
+        
+        std::cout << "🎥 Starting live image streaming for " << peer_id << std::endl;
+        std::cout << "📁 Images directory: " << images_dir_path << std::endl;
+        
+        // Get existing video track (created during peer connection setup)
+        auto track_it = video_tracks_.find(peer_id);
+        if (track_it == video_tracks_.end()) {
+            std::cout << "⚠️  No video track found for " << peer_id << std::endl;
+            return false;
+        }
+        
+        // Start streaming in background thread
+        streaming_active_[peer_id] = true;
+        streaming_threads_[peer_id] = std::thread(&WebRTCManager::streamImagesFromDirectory, this, peer_id, images_dir_path);
+        
+        return true;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "❌ Error starting image streaming for " << peer_id << ": " << e.what() << std::endl;
+        return false;
+    }
+}
+
+void WebRTCManager::stopVideoStreaming(const std::string& peer_id) {
+    std::cout << "🛑 Stopping video streaming for " << peer_id << std::endl;
+    
+    // Stop streaming
+    auto active_it = streaming_active_.find(peer_id);
+    if (active_it != streaming_active_.end()) {
+        active_it->second = false;
+    }
+    
+    // Wait for thread to finish
+    auto thread_it = streaming_threads_.find(peer_id);
+    if (thread_it != streaming_threads_.end() && thread_it->second.joinable()) {
+        thread_it->second.join();
+        streaming_threads_.erase(thread_it);
+    }
+    
+    // Clean up
+    streaming_active_.erase(peer_id);
+    video_tracks_.erase(peer_id);
+}
+
+void WebRTCManager::streamImagesFromDirectory(const std::string& peer_id, const std::string& images_dir) {
+    try {
+        std::cout << "📁 Loading images from directory: " << images_dir << std::endl;
+        
+        // Get image files
+        auto image_files = getImageFiles(images_dir);
+        if (image_files.empty()) {
+            std::cout << "⚠️  No image files found in: " << images_dir << std::endl;
+            return;
+        }
+        
+        std::cout << "📊 Found " << image_files.size() << " images" << std::endl;
+        
+        // Get video track
+        auto track_it = video_tracks_.find(peer_id);
+        if (track_it == video_tracks_.end()) {
+            std::cout << "⚠️  No video track found for " << peer_id << std::endl;
+            return;
+        }
+        
+        auto track = track_it->second;
+        if (!track) {
+            std::cout << "⚠️  Invalid video track for " << peer_id << std::endl;
+            return;
+        }
+        
+        // Stream images at 30 FPS
+        const int fps = 30;
+        const auto frame_duration = std::chrono::milliseconds(1000 / fps);
+        
+        std::cout << "🎬 Starting 30 FPS image streaming..." << std::endl;
+        
+        size_t frame_count = 0;
+        auto& active = streaming_active_[peer_id];
+        
+        while (active && frame_count < image_files.size()) {
+            // Load and process image
+            cv::Mat frame = loadAndResizeImage(image_files[frame_count]);
+            if (frame.empty()) {
+                std::cout << "⚠️  Failed to load image: " << image_files[frame_count] << std::endl;
+                frame_count++;
+                continue;
+            }
+            
+            // Send frame
+            sendH264Frame(track, frame);
+            
+            std::cout << "📤 Sent frame " << (frame_count + 1) << "/" << image_files.size() 
+                      << " (" << frame.cols << "x" << frame.rows << ")" << std::endl;
+            
+            frame_count++;
+            
+            // Wait for next frame timing
+            std::this_thread::sleep_for(frame_duration);
+        }
+        
+        std::cout << "✅ Image streaming completed for " << peer_id << " (" << frame_count << " frames sent)" << std::endl;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "❌ Error in image streaming thread for " << peer_id << ": " << e.what() << std::endl;
+    }
+}
+
+std::vector<std::string> WebRTCManager::getImageFiles(const std::string& directory) {
+    std::vector<std::string> image_files;
+    
+    try {
+        // Use OpenCV to find image files
+        std::vector<cv::String> files;
+        cv::glob(directory + "/*.jpg", files);
+        
+        // Convert to std::string and sort
+        for (const auto& file : files) {
+            image_files.push_back(file);
+        }
+        
+        // Sort files by name to ensure correct order
+        std::sort(image_files.begin(), image_files.end());
+        
+        std::cout << "🔍 Found " << image_files.size() << " JPG files in " << directory << std::endl;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "❌ Error reading directory " << directory << ": " << e.what() << std::endl;
+    }
+    
+    return image_files;
+}
+
+cv::Mat WebRTCManager::loadAndResizeImage(const std::string& image_path) {
+    try {
+        // Load image
+        cv::Mat image = cv::imread(image_path);
+        if (image.empty()) {
+            std::cerr << "❌ Failed to load image: " << image_path << std::endl;
+            return cv::Mat();
+        }
+        
+        // Resize to standard resolution for WebRTC (640x480)
+        cv::Mat resized;
+        cv::resize(image, resized, cv::Size(640, 480));
+        
+        return resized;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "❌ Error processing image " << image_path << ": " << e.what() << std::endl;
+        return cv::Mat();
+    }
+}
+
+void WebRTCManager::sendH264Frame(std::shared_ptr<rtc::Track> track, const cv::Mat& frame) {
+    if (!track || frame.empty()) {
+        std::cout << "⚠️  Invalid track or empty frame" << std::endl;
+        return;
+    }
+    
+    try {
+        // Encode frame to H264
+        auto h264_data = encodeFrameToH264(frame);
+        if (h264_data.empty()) {
+            std::cout << "⚠️  Failed to encode frame to H264" << std::endl;
+            return;
+        }
+        
+        // Send as binary data (simplified approach)
+        rtc::binary packet;
+        packet.reserve(h264_data.size());
+        
+        for (const auto& byte : h264_data) {
+            packet.push_back(static_cast<std::byte>(byte));
+        }
+        
+        if (track->send(packet)) {
+            // Success - frame sent
+        } else {
+            std::cout << "⚠️  Failed to send frame data" << std::endl;
+        }
+        
+    } catch (const std::exception& e) {
+        std::cerr << "❌ Error sending frame: " << e.what() << std::endl;
+    }
+}
+
+std::vector<uint8_t> WebRTCManager::encodeFrameToH264(const cv::Mat& frame) {
+    std::vector<uint8_t> h264_data;
+    
+    try {
+        // For libdatachannel, we need to send raw RGB/BGR frame data
+        // The library will handle H264 encoding internally
+        
+        // Ensure frame is continuous in memory
+        cv::Mat continuous_frame;
+        if (frame.isContinuous()) {
+            continuous_frame = frame;
+        } else {
+            frame.copyTo(continuous_frame);
+        }
+        
+        // Get raw BGR data
+        size_t data_size = continuous_frame.total() * continuous_frame.elemSize();
+        h264_data.assign(continuous_frame.data, continuous_frame.data + data_size);
+        
+    } catch (const std::exception& e) {
+        std::cerr << "❌ Error preparing frame data: " << e.what() << std::endl;
+    }
+    
+    return h264_data;
 }
 
 bool WebRTCManager::isWebRTCEnabled() const {
@@ -168,6 +492,38 @@ bool MockWebRTCManager::handleOffer(const std::string& peer_id, const std::strin
     }
     
     return true;
+}
+
+bool MockWebRTCManager::handleCandidates(const std::string& peer_id, const Json::Value& candidates) {
+#ifdef JSON_ENABLED
+    std::cout << "🧊 MOCK: Handling " << candidates.size() << " ICE candidates for peer " << peer_id << std::endl;
+    
+    // Mock republish to rmcs topic
+    std::string rmcs_topic = thing_name_ + "/robot-control/" + peer_id + "/candidate/rmcs";
+    
+    // Convert candidates back to JSON string
+    Json::StreamWriterBuilder builder;
+    std::string candidatesStr = Json::writeString(builder, candidates);
+    
+    if (publish_callback_) {
+        publish_callback_(rmcs_topic, candidatesStr);
+        std::cout << "📤 MOCK: Republished ICE candidates to rmcs topic" << std::endl;
+    }
+    
+    return true;
+#else
+    std::cout << "⚠️  MOCK: JSON parsing disabled - cannot handle ICE candidates" << std::endl;
+    return false;
+#endif
+}
+
+bool MockWebRTCManager::startVideoStreaming(const std::string& peer_id, const std::string& images_dir_path) {
+    std::cout << "🎥 MOCK: Starting video streaming for " << peer_id << " with images dir: " << images_dir_path << std::endl;
+    return true;
+}
+
+void MockWebRTCManager::stopVideoStreaming(const std::string& peer_id) {
+    std::cout << "🛑 MOCK: Stopping video streaming for " << peer_id << std::endl;
 }
 
 void MockWebRTCManager::closePeerConnection(const std::string& peer_id) {

@@ -24,11 +24,15 @@ RUN apt-get update && apt-get install -y \
     libjsoncpp-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install WebRTC dependencies (libdatachannel)
+# Install WebRTC and OpenCV dependencies
 RUN apt-get update && apt-get install -y \
     libssl-dev \
     libnice-dev \
     libsrtp2-dev \
+    libopencv-dev \
+    libavcodec-dev \
+    libavformat-dev \
+    libswscale-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Build and install libdatachannel from source (lightweight WebRTC library)
@@ -47,6 +51,9 @@ WORKDIR /workspace
 
 # Copy source code
 COPY mqtt_client.cpp CMakeLists.txt webrtc_manager.hpp webrtc_manager.cpp ./
+
+# Copy image directories for streaming
+COPY images/ ./images/
 
 # Create build directory and build
 RUN mkdir -p build && cd build && \

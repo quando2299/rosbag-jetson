@@ -7,6 +7,15 @@
 
 #ifdef WEBRTC_ENABLED
 #include <rtc/rtc.hpp>
+#include <thread>
+#include <atomic>
+#include <fstream>
+#include <vector>
+#include <opencv2/opencv.hpp>
+#endif
+
+#ifdef JSON_ENABLED
+#include <json/json.h>
 #endif
 
 class WebRTCManager {
@@ -20,8 +29,17 @@ public:
     // Handle incoming offer and create peer connection
     bool handleOffer(const std::string& peer_id, const std::string& offer_sdp);
     
+    // Handle ICE candidates array and republish
+    bool handleCandidates(const std::string& peer_id, const Json::Value& candidates);
+    
     // Cleanup peer connection
     void closePeerConnection(const std::string& peer_id);
+    
+    // Start live image streaming
+    bool startVideoStreaming(const std::string& peer_id, const std::string& images_dir_path);
+    
+    // Stop video streaming
+    void stopVideoStreaming(const std::string& peer_id);
     
     // Get status
     bool isWebRTCEnabled() const;
@@ -34,6 +52,13 @@ private:
     // Store peer connections by peerId
     std::map<std::string, std::shared_ptr<rtc::PeerConnection>> peer_connections_;
     
+    // Store video tracks by peerId
+    std::map<std::string, std::shared_ptr<rtc::Track>> video_tracks_;
+    
+    // Streaming control
+    std::map<std::string, std::atomic<bool>> streaming_active_;
+    std::map<std::string, std::thread> streaming_threads_;
+    
     // WebRTC configuration
     rtc::Configuration getRTCConfig();
     
@@ -42,6 +67,13 @@ private:
     
     // Handle ICE candidates
     void setupICEHandling(const std::string& peer_id, std::shared_ptr<rtc::PeerConnection> pc);
+    
+    // Live image streaming methods
+    void streamImagesFromDirectory(const std::string& peer_id, const std::string& images_dir);
+    std::vector<std::string> getImageFiles(const std::string& directory);
+    cv::Mat loadAndResizeImage(const std::string& image_path);
+    void sendH264Frame(std::shared_ptr<rtc::Track> track, const cv::Mat& frame);
+    std::vector<uint8_t> encodeFrameToH264(const cv::Mat& frame);
 #endif
 };
 
@@ -53,6 +85,9 @@ public:
     
     MockWebRTCManager(const std::string& thing_name, PublishCallback publish_cb);
     bool handleOffer(const std::string& peer_id, const std::string& offer_sdp);
+    bool handleCandidates(const std::string& peer_id, const Json::Value& candidates);
+    bool startVideoStreaming(const std::string& peer_id, const std::string& images_dir_path);
+    void stopVideoStreaming(const std::string& peer_id);
     void closePeerConnection(const std::string& peer_id);
     bool isWebRTCEnabled() const { return false; }
     
