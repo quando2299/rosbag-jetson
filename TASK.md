@@ -1,9 +1,0 @@
-- [X] Analyze .bag file - extract image data and understand the topics/message types
-- [X] Extract images from .bag file and save to appropriate format
-- [ ] Set up C++ project structure for image processing and streaming
-- [ ] Implement image processing pipeline to convert bag images to H.264 format
-- [ ] Integrate MQTT client for control signaling (start/stop playback, metadata)
-- [ ] Implement WebRTC streaming functionality for video transmission
-- [ ] Create playback controller to simulate real-time streaming from bag data
-- [ ] Implement MQTT-WebRTC coordination (MQTT triggers, WebRTC streams)
-- [ ] Test end-to-end pipeline with camera_data bag file

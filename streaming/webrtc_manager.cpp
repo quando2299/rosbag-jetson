@@ -65,6 +65,7 @@ std::shared_ptr<rtc::PeerConnection> WebRTCManager::createPeerConnection(const s
                 break;
             case rtc::PeerConnection::State::Failed:
                 std::cout << "Failed" << std::endl;
+                std::cout << "❌ WebRTC connection failed for " << peer_id << " - check network connectivity" << std::endl;
                 break;
             case rtc::PeerConnection::State::Closed:
                 std::cout << "Closed" << std::endl;

@@ -26,6 +26,7 @@ echo ""
 docker run \
     --rm \
     -it \
+    --network host \
     --platform linux/$(uname -m | sed 's/x86_64/amd64/') \
     --name mqtt-streaming-client \
     mqtt-streaming:latest
