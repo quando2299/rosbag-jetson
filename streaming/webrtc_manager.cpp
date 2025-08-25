@@ -180,13 +180,13 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
         try {
             std::cout << "🎬 Adding video track to peer connection (step 3)" << std::endl;
             
-            // Create video media description with H264 codec - match working robot_simulator
+            // Create video media description with H264 codec - match working robot_simulator  
             rtc::Description::Video video("video", rtc::Description::Direction::SendOnly);
             video.addH264Codec(96, "packetization-mode=1;level-asymmetry-allowed=1"); 
             video.setBitrate(1000); // 1 Mbps
             
-            // Add stream label to ensure proper media stream creation
-            video.addSSRC(12345678, "video-stream-1");
+            // Add SSRC and media stream ID (critical for Flutter onTrack recognition)
+            video.addSSRC(12345678, "robot-video-stream", "video-track-001");
             
             auto video_track = pc->addTrack(video);
             video_tracks_[peer_id] = video_track;
