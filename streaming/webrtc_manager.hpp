@@ -51,6 +51,9 @@ public:
     // Test pattern streaming for debugging
     void startTestPatternStreaming(const std::string& peer_id);
     
+    // Live video streaming (like robot_simulator camera)
+    void startLiveVideoStreaming(const std::string& peer_id);
+    
 private:
     std::string thing_name_;
     PublishCallback publish_callback_;
@@ -86,6 +89,10 @@ private:
     std::vector<std::vector<uint8_t>> extractNALUnits(const std::vector<uint8_t>& mp4_data);
     std::vector<uint8_t> applyEmulationPrevention(const std::vector<uint8_t>& nal_unit);
     void sendNALUnit(std::shared_ptr<rtc::Track> track, const std::vector<uint8_t>& nal_unit);
+    
+    // Live video frame generation (like robot_simulator camera)
+    std::vector<uint8_t> generateLiveH264Frame(int frame_number);
+    void sendH264FrameRTP(std::shared_ptr<rtc::Track> track, const std::vector<uint8_t>& h264_frame, int frame_number);
 #endif
 };
 

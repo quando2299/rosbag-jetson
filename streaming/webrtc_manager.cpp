@@ -190,15 +190,9 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
                 std::thread([this, peer_id]() {
                     std::this_thread::sleep_for(std::chrono::milliseconds(500));
                     
-                    std::string video_file = this->findVideoFile();
-                    if (!video_file.empty()) {
-                        std::cout << "🎬 Starting H264 video streaming via WebRTC..." << std::endl;
-                        std::cout << "📹 Video file: " << video_file << std::endl;
-                        this->startH264FileStreaming(peer_id, video_file);
-                    } else {
-                        std::cout << "⚠️ No video file found - starting test pattern..." << std::endl;
-                        this->startTestPatternStreaming(peer_id);
-                    }
+                    // Start live video frame streaming (like robot_simulator camera feed)
+                    std::cout << "🎬 Starting live video frame streaming via WebRTC..." << std::endl;
+                    this->startLiveVideoStreaming(peer_id);
                 }).detach();
             });
             
@@ -747,6 +741,173 @@ void WebRTCManager::startTestPatternStreaming(const std::string& peer_id) {
         
     } catch (const std::exception& e) {
         std::cerr << "❌ Error starting test pattern: " << e.what() << std::endl;
+    }
+}
+
+void WebRTCManager::startLiveVideoStreaming(const std::string& peer_id) {
+    try {
+        auto track_it = video_tracks_.find(peer_id);
+        if (track_it == video_tracks_.end()) {
+            std::cout << "⚠️  No video track found for " << peer_id << std::endl;
+            return;
+        }
+        
+        auto track = track_it->second;
+        if (!track || !track->isOpen()) {
+            std::cout << "⚠️  Track is not ready for " << peer_id << std::endl;
+            return;
+        }
+        
+        std::cout << "🎥 Starting live video streaming for " << peer_id << std::endl;
+        
+        streaming_active_[peer_id] = true;
+        streaming_threads_[peer_id] = std::thread([this, peer_id, track]() {
+            try {
+                auto& active = streaming_active_[peer_id];
+                int frame_count = 0;
+                const auto frame_duration = std::chrono::milliseconds(33); // 30 FPS (33ms per frame)
+                
+                std::cout << "📹 Generating live H.264 video frames at 30fps..." << std::endl;
+                
+                while (active) {
+                    // Generate a live video frame (simulate camera feed)
+                    auto h264_frame = generateLiveH264Frame(frame_count);
+                    
+                    if (!h264_frame.empty()) {
+                        sendH264FrameRTP(track, h264_frame, frame_count);
+                        
+                        if (frame_count % 30 == 0) { // Log every second
+                            std::cout << "🎬 Streaming frame " << frame_count << " (size: " << h264_frame.size() << " bytes)" << std::endl;
+                        }
+                    }
+                    
+                    frame_count++;
+                    std::this_thread::sleep_for(frame_duration);
+                }
+                
+                std::cout << "✅ Live video streaming stopped (" << frame_count << " frames sent)" << std::endl;
+                
+            } catch (const std::exception& e) {
+                std::cerr << "❌ Error in live video streaming: " << e.what() << std::endl;
+            }
+        });
+        
+    } catch (const std::exception& e) {
+        std::cerr << "❌ Error starting live video streaming: " << e.what() << std::endl;
+    }
+}
+
+std::vector<uint8_t> WebRTCManager::generateLiveH264Frame(int frame_number) {
+    // Generate a simple H.264 frame with proper NAL units
+    // This simulates what a real camera would produce
+    
+    std::vector<uint8_t> frame;
+    
+    // Every 30 frames (1 second), send SPS/PPS/IDR. Otherwise send P-frames.
+    bool is_keyframe = (frame_number % 30 == 0);
+    
+    if (is_keyframe) {
+        // SPS (Sequence Parameter Set)
+        std::vector<uint8_t> sps = {
+            0x67, 0x42, 0x00, 0x1E, 0x8D, 0x80, 0x28, 0x02, 
+            0xDD, 0x80, 0xB5, 0x01, 0x01, 0x01, 0x40, 0x00, 
+            0x00, 0x03, 0x00, 0x40, 0x00, 0x00, 0x0F, 0x03, 
+            0xC5, 0x8B, 0xA8
+        };
+        
+        // PPS (Picture Parameter Set)
+        std::vector<uint8_t> pps = {
+            0x68, 0xCE, 0x3C, 0x80
+        };
+        
+        // Add SPS
+        frame.insert(frame.end(), sps.begin(), sps.end());
+        
+        // Add PPS  
+        frame.insert(frame.end(), pps.begin(), pps.end());
+        
+        // Add IDR frame (simplified)
+        std::vector<uint8_t> idr_header = {0x65, 0x88, 0x82, 0x07, 0xFF, 0xFF};
+        frame.insert(frame.end(), idr_header.begin(), idr_header.end());
+        
+        // Add some dummy payload for IDR frame
+        for (int i = 0; i < 200; i++) {
+            frame.push_back(static_cast<uint8_t>(0xAA + (i % 16)));
+        }
+        
+        std::cout << "📹 Generated keyframe " << frame_number << " (SPS+PPS+IDR, size: " << frame.size() << " bytes)" << std::endl;
+    } else {
+        // P-frame (predicted frame)
+        std::vector<uint8_t> p_header = {0x41, 0x9A, 0x24, 0x4D, 0x01, 0x8F};
+        frame.insert(frame.end(), p_header.begin(), p_header.end());
+        
+        // Add some dummy payload for P-frame (smaller than IDR)
+        for (int i = 0; i < 50; i++) {
+            frame.push_back(static_cast<uint8_t>(0x55 + ((i + frame_number) % 32)));
+        }
+    }
+    
+    return frame;
+}
+
+void WebRTCManager::sendH264FrameRTP(std::shared_ptr<rtc::Track> track, const std::vector<uint8_t>& h264_frame, int frame_number) {
+    if (!track || !track->isOpen() || h264_frame.empty()) {
+        return;
+    }
+    
+    try {
+        // Create RTP packet with H.264 payload
+        const size_t RTP_HEADER_SIZE = 12;
+        const size_t MAX_PAYLOAD_SIZE = 1200;
+        
+        if (h264_frame.size() <= MAX_PAYLOAD_SIZE) {
+            rtc::binary packet;
+            packet.reserve(RTP_HEADER_SIZE + h264_frame.size());
+            
+            // RTP header
+            packet.push_back(static_cast<std::byte>(0x80)); // V=2, P=0, X=0, CC=0
+            packet.push_back(static_cast<std::byte>(0x60)); // M=0 (will set to 1 for last packet), PT=96 (H.264)
+            
+            // Set marker bit for keyframes (end of frame)
+            if (frame_number % 30 == 0) { // Keyframes
+                packet[1] = static_cast<std::byte>(0xE0); // M=1, PT=96
+            }
+            
+            // Sequence number (16 bits)
+            static uint16_t seq_num = 1000;
+            seq_num++;
+            packet.push_back(static_cast<std::byte>(seq_num >> 8));
+            packet.push_back(static_cast<std::byte>(seq_num & 0xFF));
+            
+            // Timestamp (32 bits) - 90kHz clock
+            uint32_t timestamp = frame_number * 3000; // 30fps = 3000 ticks per frame at 90kHz
+            packet.push_back(static_cast<std::byte>(timestamp >> 24));
+            packet.push_back(static_cast<std::byte>((timestamp >> 16) & 0xFF));
+            packet.push_back(static_cast<std::byte>((timestamp >> 8) & 0xFF));
+            packet.push_back(static_cast<std::byte>(timestamp & 0xFF));
+            
+            // SSRC (32 bits) - fixed value
+            packet.push_back(static_cast<std::byte>(0x12));
+            packet.push_back(static_cast<std::byte>(0x34));
+            packet.push_back(static_cast<std::byte>(0x56));
+            packet.push_back(static_cast<std::byte>(0x78));
+            
+            // Add H.264 payload
+            for (uint8_t byte : h264_frame) {
+                packet.push_back(static_cast<std::byte>(byte));
+            }
+            
+            if (track->send(packet)) {
+                // Success - frame sent
+            } else {
+                std::cout << "⚠️  Failed to send H264 frame " << frame_number << std::endl;
+            }
+        } else {
+            std::cout << "⚠️  H264 frame too large: " << h264_frame.size() << " bytes" << std::endl;
+        }
+        
+    } catch (const std::exception& e) {
+        std::cerr << "❌ Error sending H264 frame: " << e.what() << std::endl;
     }
 }
 
