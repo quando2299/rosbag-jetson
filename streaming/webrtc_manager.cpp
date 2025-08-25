@@ -144,7 +144,7 @@ void WebRTCManager::setupICEHandling(const std::string& peer_id, std::shared_ptr
     });
     
     pc->onLocalDescription([this, peer_id](rtc::Description description) {
-        std::cout << "📝 Step 5: Local description (answer) ready for " << peer_id << std::endl;
+        std::cout << "🎉 CALLBACK TRIGGERED: Step 5: Local description (answer) ready for " << peer_id << std::endl;
         
         // Debug: Print SDP to check video track configuration
         std::string sdp_answer = description;
@@ -218,9 +218,16 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
         
         // Step 4: Set remote description using received offer
         std::cout << "📥 Setting remote description (step 4)" << std::endl;
-        rtc::Description offer(offer_sdp, rtc::Description::Type::Offer);
-        pc->setRemoteDescription(offer);
-        std::cout << "✅ Remote description set (step 4 complete)" << std::endl;
+        std::cout << "🔍 DEBUG: Received offer SDP length: " << offer_sdp.length() << " chars" << std::endl;
+        
+        try {
+            rtc::Description offer(offer_sdp, rtc::Description::Type::Offer);
+            pc->setRemoteDescription(offer);
+            std::cout << "✅ Remote description set (step 4 complete)" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "❌ Error setting remote description: " << e.what() << std::endl;
+            return false;
+        }
         
         // Step 5 & 6: Create answer, setLocalDescription, and publish will happen automatically 
         // via the onLocalDescription callback set up in createPeerConnection()
