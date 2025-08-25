@@ -1,0 +1,50 @@
+cmake_minimum_required(VERSION 3.10)
+project(GStreamerWebRTCSender)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Find required packages
+find_package(PkgConfig REQUIRED)
+
+# Find GStreamer
+pkg_check_modules(GST REQUIRED 
+    gstreamer-1.0
+    gstreamer-webrtc-1.0
+    gstreamer-sdp-1.0
+    nice
+)
+
+# Find Mosquitto
+find_path(MOSQUITTO_INCLUDE_DIR mosquitto.h)
+find_library(MOSQUITTO_LIBRARY mosquitto)
+
+# Find JSON library
+find_package(nlohmann_json REQUIRED)
+
+# Include directories
+include_directories(
+    ${GST_INCLUDE_DIRS}
+    ${MOSQUITTO_INCLUDE_DIR}
+)
+
+# Add executable
+add_executable(gstreamer_webrtc_sender
+    gstreamer_webrtc_sender.cpp
+)
+
+# Link libraries
+target_link_libraries(gstreamer_webrtc_sender
+    ${GST_LIBRARIES}
+    ${MOSQUITTO_LIBRARY}
+    nlohmann_json::nlohmann_json
+    pthread
+)
+
+# Compile flags
+target_compile_options(gstreamer_webrtc_sender PRIVATE ${GST_CFLAGS_OTHER})
+
+# Set RPATH for runtime
+set_target_properties(gstreamer_webrtc_sender PROPERTIES
+    INSTALL_RPATH_USE_LINK_PATH TRUE
+)
