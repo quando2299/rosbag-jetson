@@ -180,9 +180,11 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
         try {
             std::cout << "🎬 Adding video track to peer connection" << std::endl;
             
-            // Create video media description with H264 codec
-            rtc::Description::Video video("video0", rtc::Description::Direction::SendOnly);
-            video.addH264Codec(96, "baseline"); // PT 96 for H264
+            // Create video media description with H264 codec - match robot_simulator format
+            rtc::Description::Video video("video", rtc::Description::Direction::SendOnly);
+            
+            // Use same H264 codec parameters as robot_simulator
+            video.addH264Codec(96, "packetization-mode=1;level-asymmetry-allowed=1"); 
             video.setBitrate(1000); // 1 Mbps
             
             auto video_track = pc->addTrack(video);
@@ -590,12 +592,35 @@ bool WebRTCManager::startH264FileStreaming(const std::string& peer_id, const std
         auto nal_units = extractNALUnits(video_data);
         std::cout << "🔍 Extracted " << nal_units.size() << " NAL units from video file" << std::endl;
         
+        // Count NAL unit types for debugging
+        std::map<int, int> nal_type_counts;
+        for (const auto& nal_unit : nal_units) {
+            if (!nal_unit.empty()) {
+                uint8_t nal_type = nal_unit[0] & 0x1F;
+                nal_type_counts[nal_type]++;
+            }
+        }
+        
+        std::cout << "📊 NAL unit type distribution:" << std::endl;
+        for (const auto& [type, count] : nal_type_counts) {
+            const char* type_name = "Unknown";
+            switch (type) {
+                case 1: type_name = "Non-IDR"; break;
+                case 5: type_name = "IDR"; break;
+                case 6: type_name = "SEI"; break;
+                case 7: type_name = "SPS"; break;
+                case 8: type_name = "PPS"; break;
+                case 9: type_name = "AU Delimiter"; break;
+            }
+            std::cout << "   Type " << type << " (" << type_name << "): " << count << " units" << std::endl;
+        }
+        
         if (nal_units.empty()) {
             std::cout << "⚠️  No NAL units found in video file" << std::endl;
             return false;
         }
         
-        const auto frame_duration = std::chrono::milliseconds(33); // 30 FPS
+        const auto frame_duration = std::chrono::milliseconds(33); // 30 FPS (33ms per frame)
         
         streaming_active_[peer_id] = true;
         streaming_threads_[peer_id] = std::thread([this, peer_id, nal_units, frame_duration, track]() {
@@ -693,7 +718,7 @@ void WebRTCManager::startTestPatternStreaming(const std::string& peer_id) {
             try {
                 auto& active = streaming_active_[peer_id];
                 int frame_count = 0;
-                const auto frame_duration = std::chrono::milliseconds(33); // 30 FPS
+                const auto frame_duration = std::chrono::milliseconds(33); // 30 FPS (33ms per frame)
                 
                 while (active && frame_count < 300) { // Stream for 10 seconds
                     // Create a simple test pattern
@@ -963,11 +988,6 @@ void WebRTCManager::sendNALUnit(std::shared_ptr<rtc::Track> track, const std::ve
     }
     
     try {
-        // Fragment large NAL units to avoid MTU issues
-        const size_t MAX_PACKET_SIZE = 1200; // Safe MTU size
-        const size_t START_CODE_SIZE = 4;
-        const size_t MIN_PACKET_SIZE = 12; // Minimum for RTP header + data
-        
         uint8_t nal_type = nal_unit[0] & 0x1F;
         const char* nal_type_name = "Unknown";
         switch (nal_type) {
@@ -985,99 +1005,69 @@ void WebRTCManager::sendNALUnit(std::shared_ptr<rtc::Track> track, const std::ve
             return;
         }
         
-        // Ensure minimum packet size for RTP compatibility
-        size_t total_packet_size = nal_unit.size() + START_CODE_SIZE;
-        if (total_packet_size < MIN_PACKET_SIZE) {
-            std::cout << "⚠️ Skipping NAL unit too small for RTP (type " << (int)nal_type 
-                     << ", " << total_packet_size << " bytes)" << std::endl;
-            return;
-        }
+        // Create RTP packet for H.264 NAL unit
+        // RTP Header format for H.264:
+        // - 12 byte RTP header
+        // - H.264 payload (NAL unit without start codes)
         
-        // If NAL unit + start code fits in one packet, send as single packet
-        if (total_packet_size <= MAX_PACKET_SIZE) {
+        const size_t RTP_HEADER_SIZE = 12;
+        const size_t MAX_PAYLOAD_SIZE = 1200; // Safe MTU minus RTP header
+        
+        // Simple RTP packetization - send NAL unit as single RTP packet
+        if (nal_unit.size() <= MAX_PAYLOAD_SIZE) {
             rtc::binary packet;
-            packet.reserve(total_packet_size);
+            packet.reserve(RTP_HEADER_SIZE + nal_unit.size());
             
-            // Add NAL unit start code
-            packet.push_back(static_cast<std::byte>(0x00));
-            packet.push_back(static_cast<std::byte>(0x00));
-            packet.push_back(static_cast<std::byte>(0x00));
-            packet.push_back(static_cast<std::byte>(0x01));
+            // Simple RTP header (minimal for libdatachannel)
+            // Version (2 bits) = 2, Padding (1 bit) = 0, Extension (1 bit) = 0, CC (4 bits) = 0
+            packet.push_back(static_cast<std::byte>(0x80)); // V=2, P=0, X=0, CC=0
             
-            // Add NAL unit payload
+            // Marker (1 bit) = 1 (end of frame), Payload Type (7 bits) = 96 (H.264)
+            packet.push_back(static_cast<std::byte>(0xE0)); // M=1, PT=96
+            
+            // Sequence number (16 bits) - simplified, use static counter
+            static uint16_t seq_num = 0;
+            seq_num++;
+            packet.push_back(static_cast<std::byte>(seq_num >> 8));
+            packet.push_back(static_cast<std::byte>(seq_num & 0xFF));
+            
+            // Timestamp (32 bits) - use current time in 90kHz units
+            static uint32_t timestamp = 0;
+            timestamp += 3000; // ~33ms at 90kHz for 30fps
+            packet.push_back(static_cast<std::byte>(timestamp >> 24));
+            packet.push_back(static_cast<std::byte>((timestamp >> 16) & 0xFF));
+            packet.push_back(static_cast<std::byte>((timestamp >> 8) & 0xFF));
+            packet.push_back(static_cast<std::byte>(timestamp & 0xFF));
+            
+            // SSRC (32 bits) - use fixed value
+            packet.push_back(static_cast<std::byte>(0x12));
+            packet.push_back(static_cast<std::byte>(0x34));
+            packet.push_back(static_cast<std::byte>(0x56));
+            packet.push_back(static_cast<std::byte>(0x78));
+            
+            // Add NAL unit payload (without start codes)
             for (uint8_t byte : nal_unit) {
                 packet.push_back(static_cast<std::byte>(byte));
             }
             
             if (track->send(packet)) {
                 static int sent_count = 0;
-                if (sent_count % 10 == 0) {
-                    std::cout << "📤 Sent NAL unit (type " << (int)nal_type << "-" << nal_type_name 
-                             << ", size: " << packet.size() << " bytes)" << std::endl;
+                if (sent_count % 30 == 0) { // Log every 30 packets (1 second at 30fps)
+                    std::cout << "📤 Sent RTP packet " << sent_count << " (type " << (int)nal_type 
+                             << "-" << nal_type_name << ", size: " << packet.size() << " bytes)" << std::endl;
                 }
                 sent_count++;
             } else {
-                std::cout << "⚠️ Failed to send NAL unit (type " << (int)nal_type << ")" << std::endl;
+                std::cout << "⚠️ Failed to send RTP packet (type " << (int)nal_type << ")" << std::endl;
             }
         } else {
-            // Fragment large NAL unit into multiple packets
-            std::cout << "📦 Fragmenting large NAL unit (type " << (int)nal_type << "-" << nal_type_name 
-                     << ", " << nal_unit.size() << " bytes) into smaller packets" << std::endl;
-            
-            size_t offset = 0;
-            int fragment_count = 0;
-            bool success = true;
-            
-            while (offset < nal_unit.size() && success) {
-                size_t remaining = nal_unit.size() - offset;
-                size_t fragment_size = std::min(MAX_PACKET_SIZE - START_CODE_SIZE, remaining);
-                
-                // Ensure last fragment is not too small
-                if (remaining > fragment_size && (remaining - fragment_size) < (MIN_PACKET_SIZE - START_CODE_SIZE)) {
-                    fragment_size = remaining; // Include the small remainder in this fragment
-                }
-                
-                // Ensure this fragment meets minimum size
-                if (fragment_size + START_CODE_SIZE < MIN_PACKET_SIZE) {
-                    std::cout << "⚠️ Fragment too small, skipping remainder" << std::endl;
-                    break;
-                }
-                
-                rtc::binary packet;
-                packet.reserve(fragment_size + START_CODE_SIZE);
-                
-                // Add start code for each fragment
-                packet.push_back(static_cast<std::byte>(0x00));
-                packet.push_back(static_cast<std::byte>(0x00));
-                packet.push_back(static_cast<std::byte>(0x00));
-                packet.push_back(static_cast<std::byte>(0x01));
-                
-                // Add fragment data
-                for (size_t i = 0; i < fragment_size; i++) {
-                    packet.push_back(static_cast<std::byte>(nal_unit[offset + i]));
-                }
-                
-                if (track->send(packet)) {
-                    std::cout << "📤 Sent fragment " << fragment_count << " (size: " << packet.size() << " bytes)" << std::endl;
-                } else {
-                    std::cout << "⚠️ Failed to send fragment " << fragment_count << std::endl;
-                    success = false;
-                }
-                
-                offset += fragment_size;
-                fragment_count++;
-                
-                // Small delay between fragments to avoid overwhelming
-                std::this_thread::sleep_for(std::chrono::milliseconds(2));
-            }
-            
-            if (success) {
-                std::cout << "✅ Successfully sent " << fragment_count << " fragments for NAL unit type " << (int)nal_type << std::endl;
-            }
+            std::cout << "⚠️ NAL unit too large for single RTP packet (size: " << nal_unit.size() << " bytes)" << std::endl;
+            // For simplicity, skip fragmentation for now - focus on getting basic streaming working
+            return;
         }
         
     } catch (const std::exception& e) {
-        std::cerr << "❌ Error sending NAL unit: " << e.what() << std::endl;
+        std::cerr << "❌ Error sending RTP packet: " << e.what() << std::endl;
     }
 }
 
