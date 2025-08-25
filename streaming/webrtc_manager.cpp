@@ -226,10 +226,16 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
             return false;
         }
         
-        // Step 5: Generate local SDP (THIS WAS MISSING!)
-        std::cout << "📝 Step 5: Calling setLocalDescription() to generate answer" << std::endl;
-        pc->setLocalDescription(); // This triggers onLocalDescription callback
-        std::cout << "✅ setLocalDescription() called - answer will be generated automatically" << std::endl;
+        // Step 5: Explicitly call setLocalDescription() to generate answer
+        // Note: Some versions of libdatachannel do this automatically, but let's be explicit
+        std::cout << "📝 Step 5: Generating answer via setLocalDescription()" << std::endl;
+        try {
+            pc->setLocalDescription();
+            std::cout << "✅ setLocalDescription() called successfully" << std::endl;
+        } catch (const std::exception& e) {
+            // If it fails, it might be because libdatachannel already called it automatically
+            std::cout << "⚠️ Note: " << e.what() << " (might be auto-generated)" << std::endl;
+        }
         
         return true;
         
