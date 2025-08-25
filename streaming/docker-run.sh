@@ -29,7 +29,6 @@ docker run \
     --network host \
     --platform linux/$(uname -m | sed 's/x86_64/amd64/') \
     --name mqtt-streaming-client \
-    -v $(pwd)/../bag_processor:/workspace/bag_processor:ro \
     mqtt-streaming:latest
 
 if [ $? -eq 0 ]; then

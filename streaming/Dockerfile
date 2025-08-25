@@ -52,7 +52,8 @@ WORKDIR /workspace
 # Copy source code
 COPY mqtt_client.cpp CMakeLists.txt webrtc_manager.hpp webrtc_manager.cpp ./
 
-# Copy image directories for streaming (removed - not needed)
+# Copy video files directory (prepare-videos.sh should be run first)
+COPY videos/ /workspace/videos/
 
 # Create build directory and build
 RUN mkdir -p build && cd build && \

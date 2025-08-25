@@ -637,71 +637,23 @@ bool WebRTCManager::startH264FileStreaming(const std::string& peer_id, const std
 }
 
 std::string WebRTCManager::findVideoFile() {
-    std::cout << "🔍 Searching for video files..." << std::endl;
+    std::cout << "🔍 Looking for video files in /workspace/videos..." << std::endl;
     
-    // Try common locations for bag_processor directory
-    std::vector<std::string> search_paths = {
-        "../bag_processor",           // When running from streaming directory
-        "../../bag_processor",         // When running from build directory
-        "/workspace/bag_processor",    // Docker container path
-        "./bag_processor"              // Current directory
-    };
+    // Look for MP4 files in the videos directory (copied during Docker build)
+    std::vector<cv::String> videos;
+    cv::glob("/workspace/videos/*.mp4", videos);
     
-    for (const auto& base_path : search_paths) {
-        std::cout << "📁 Checking path: " << base_path << std::endl;
-        
-        // Look for extracted_images_* directories
-        std::vector<cv::String> dirs;
-        cv::glob(base_path + "/extracted_images_*", dirs);
-        
-        if (dirs.empty()) {
-            std::cout << "  No extracted_images_* directories found" << std::endl;
-        }
-        
-        for (const auto& dir : dirs) {
-            std::cout << "  📂 Found directory: " << dir << std::endl;
-            
-            // Look for MP4 files in each directory
-            std::vector<cv::String> videos;
-            cv::glob(dir + "/*.mp4", videos);
-            
-            if (!videos.empty()) {
-                std::cout << "  ✅ Found " << videos.size() << " video files in " << dir << std::endl;
-                std::cout << "  📹 Using video: " << videos[0] << std::endl;
-                // Return the first video file found
-                return videos[0];
-            } else {
-                std::cout << "  No MP4 files found in this directory" << std::endl;
-            }
-        }
+    if (!videos.empty()) {
+        std::cout << "✅ Found " << videos.size() << " video file(s)" << std::endl;
+        std::cout << "📹 Using video: " << videos[0] << std::endl;
+        return videos[0];
     }
     
-    // Fallback: try to find any MP4 file in common locations
-    std::vector<std::string> fallback_patterns = {
-        "../bag_processor/extracted_images*/*.mp4",
-        "../../bag_processor/extracted_images*/*.mp4",
-        "/workspace/bag_processor/extracted_images*/*.mp4"
-    };
+    std::cout << "⚠️ No video files found in /workspace/videos/" << std::endl;
     
-    for (const auto& pattern : fallback_patterns) {
-        std::vector<cv::String> videos;
-        cv::glob(pattern, videos);
-        if (!videos.empty()) {
-            std::cout << "🔍 Found video file: " << videos[0] << std::endl;
-            return videos[0];
-        }
-    }
-    
-    std::cout << "⚠️ No video files found in bag_processor directories" << std::endl;
-    
-    // Try hardcoded path as last resort for testing
-    std::string test_video = "/workspace/bag_processor/extracted_images_20250823_115613/flir_id8_image_resized_30fps.mp4";
-    std::ifstream test_file(test_video);
-    if (test_file.good()) {
-        test_file.close();
-        std::cout << "📹 Using hardcoded test video: " << test_video << std::endl;
-        return test_video;
-    }
+    // List what's actually there for debugging
+    std::cout << "📁 Contents of /workspace/videos:" << std::endl;
+    system("ls -la /workspace/videos/ 2>/dev/null || echo 'Directory not found'");
     
     return "";
 }
