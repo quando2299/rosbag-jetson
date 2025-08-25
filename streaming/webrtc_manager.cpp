@@ -185,8 +185,15 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
             video.addH264Codec(96, "packetization-mode=1;level-asymmetry-allowed=1"); 
             video.setBitrate(1000); // 1 Mbps
             
-            // Add SSRC and media stream ID (critical for Flutter onTrack recognition)
-            video.addSSRC(12345678, "robot-video-stream", "video-track-001");
+            // Add SSRC with proper media stream ID for Flutter onTrack recognition
+            try {
+                video.addSSRC(12345678, "robot-video-stream");
+                video.addAttribute("msid:robot-video-stream video-track-001");
+                std::cout << "✅ Added SSRC and media stream attributes" << std::endl;
+            } catch (const std::exception& e) {
+                std::cout << "⚠️ Could not add SSRC attributes: " << e.what() << std::endl;
+                // Continue anyway - try without SSRC
+            }
             
             auto video_track = pc->addTrack(video);
             video_tracks_[peer_id] = video_track;
