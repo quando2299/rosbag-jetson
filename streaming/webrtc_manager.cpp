@@ -766,14 +766,12 @@ std::vector<std::vector<uint8_t>> WebRTCManager::extractNALUnits(const std::vect
             if (end > start && start < mp4_data.size()) {
                 std::vector<uint8_t> nal_unit(mp4_data.begin() + start, mp4_data.begin() + end);
                 
-                // Only process valid H.264 NAL units (types 1-12, 14-18, 24-31)
-                if (!nal_unit.empty()) {
+                // Only process valid H.264 NAL units and ensure minimum size
+                if (!nal_unit.empty() && nal_unit.size() >= 1) {
                     uint8_t nal_type = nal_unit[0] & 0x1F;
                     
-                    // Filter out invalid/unknown NAL unit types
-                    if ((nal_type >= 1 && nal_type <= 12) || 
-                        (nal_type >= 14 && nal_type <= 18) ||
-                        (nal_type >= 24 && nal_type <= 31)) {
+                    // Only accept common H.264 NAL unit types (more restrictive filtering)
+                    if (nal_type >= 1 && nal_type <= 9) {
                         
                         // Don't apply emulation prevention - it's already handled in MP4
                         nal_units.push_back(nal_unit);
@@ -825,14 +823,12 @@ std::vector<std::vector<uint8_t>> WebRTCManager::extractNALUnits(const std::vect
             if (end > start && start < mp4_data.size()) {
                 std::vector<uint8_t> nal_unit(mp4_data.begin() + start, mp4_data.begin() + end);
                 
-                // Only process valid H.264 NAL units
-                if (!nal_unit.empty()) {
+                // Only process valid H.264 NAL units and ensure minimum size
+                if (!nal_unit.empty() && nal_unit.size() >= 1) {
                     uint8_t nal_type = nal_unit[0] & 0x1F;
                     
-                    // Filter out invalid/unknown NAL unit types
-                    if ((nal_type >= 1 && nal_type <= 12) || 
-                        (nal_type >= 14 && nal_type <= 18) ||
-                        (nal_type >= 24 && nal_type <= 31)) {
+                    // Only accept common H.264 NAL unit types (more restrictive filtering)
+                    if (nal_type >= 1 && nal_type <= 9) {
                         
                         // Don't apply emulation prevention - it's already handled in MP4
                         nal_units.push_back(nal_unit);
@@ -896,10 +892,17 @@ void WebRTCManager::sendNALUnit(std::shared_ptr<rtc::Track> track, const std::ve
         return;
     }
     
+    // Skip very small NAL units that may be invalid/padding
+    if (nal_unit.size() < 2) {
+        std::cout << "⚠️ Skipping tiny NAL unit (size: " << nal_unit.size() << " bytes)" << std::endl;
+        return;
+    }
+    
     try {
         // Fragment large NAL units to avoid MTU issues
         const size_t MAX_PACKET_SIZE = 1200; // Safe MTU size
         const size_t START_CODE_SIZE = 4;
+        const size_t MIN_PACKET_SIZE = 12; // Minimum for RTP header + data
         
         uint8_t nal_type = nal_unit[0] & 0x1F;
         const char* nal_type_name = "Unknown";
@@ -912,10 +915,24 @@ void WebRTCManager::sendNALUnit(std::shared_ptr<rtc::Track> track, const std::ve
             case 9: nal_type_name = "AU Delimiter"; break;
         }
         
+        // Skip invalid NAL unit types
+        if (nal_type == 0 || nal_type > 9) {
+            std::cout << "⚠️ Skipping invalid NAL unit type: " << (int)nal_type << std::endl;
+            return;
+        }
+        
+        // Ensure minimum packet size for RTP compatibility
+        size_t total_packet_size = nal_unit.size() + START_CODE_SIZE;
+        if (total_packet_size < MIN_PACKET_SIZE) {
+            std::cout << "⚠️ Skipping NAL unit too small for RTP (type " << (int)nal_type 
+                     << ", " << total_packet_size << " bytes)" << std::endl;
+            return;
+        }
+        
         // If NAL unit + start code fits in one packet, send as single packet
-        if (nal_unit.size() + START_CODE_SIZE <= MAX_PACKET_SIZE) {
+        if (total_packet_size <= MAX_PACKET_SIZE) {
             rtc::binary packet;
-            packet.reserve(nal_unit.size() + START_CODE_SIZE);
+            packet.reserve(total_packet_size);
             
             // Add NAL unit start code
             packet.push_back(static_cast<std::byte>(0x00));
@@ -948,8 +965,21 @@ void WebRTCManager::sendNALUnit(std::shared_ptr<rtc::Track> track, const std::ve
             bool success = true;
             
             while (offset < nal_unit.size() && success) {
+                size_t remaining = nal_unit.size() - offset;
+                size_t fragment_size = std::min(MAX_PACKET_SIZE - START_CODE_SIZE, remaining);
+                
+                // Ensure last fragment is not too small
+                if (remaining > fragment_size && (remaining - fragment_size) < (MIN_PACKET_SIZE - START_CODE_SIZE)) {
+                    fragment_size = remaining; // Include the small remainder in this fragment
+                }
+                
+                // Ensure this fragment meets minimum size
+                if (fragment_size + START_CODE_SIZE < MIN_PACKET_SIZE) {
+                    std::cout << "⚠️ Fragment too small, skipping remainder" << std::endl;
+                    break;
+                }
+                
                 rtc::binary packet;
-                size_t fragment_size = std::min(MAX_PACKET_SIZE - START_CODE_SIZE, nal_unit.size() - offset);
                 packet.reserve(fragment_size + START_CODE_SIZE);
                 
                 // Add start code for each fragment
@@ -974,7 +1004,7 @@ void WebRTCManager::sendNALUnit(std::shared_ptr<rtc::Track> track, const std::ve
                 fragment_count++;
                 
                 // Small delay between fragments to avoid overwhelming
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
             }
             
             if (success) {
