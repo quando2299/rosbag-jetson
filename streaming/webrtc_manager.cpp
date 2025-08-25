@@ -35,9 +35,25 @@ WebRTCManager::~WebRTCManager() {
 rtc::Configuration WebRTCManager::getRTCConfig() {
     rtc::Configuration config;
     
-    // Add STUN servers
+    // Add multiple STUN servers for better connectivity
     config.iceServers.emplace_back("stun:stun.l.google.com:19302");
     config.iceServers.emplace_back("stun:stun1.l.google.com:19302");
+    config.iceServers.emplace_back("stun:stun2.l.google.com:19302");
+    config.iceServers.emplace_back("stun:stun3.l.google.com:19302");
+    config.iceServers.emplace_back("stun:stun4.l.google.com:19302");
+    
+    // Add public TURN server for NAT traversal (important for restricted networks)
+    // Note: In production, use your own TURN server with authentication
+    rtc::IceServer turn1("turn:openrelay.metered.ca", 80, "openrelayproject", "openrelayproject", rtc::IceServer::RelayType::TurnUdp);
+    config.iceServers.push_back(turn1);
+    
+    rtc::IceServer turn2("turn:openrelay.metered.ca", 443, "openrelayproject", "openrelayproject", rtc::IceServer::RelayType::TurnTcp);
+    config.iceServers.push_back(turn2);
+    
+    // Set ICE transport policy for better connectivity
+    config.enableIceTcp = true;  // Enable ICE-TCP for firewall traversal
+    
+    std::cout << "🌐 WebRTC config: " << config.iceServers.size() << " ICE servers configured" << std::endl;
     
     return config;
 }
@@ -55,6 +71,7 @@ std::shared_ptr<rtc::PeerConnection> WebRTCManager::createPeerConnection(const s
                 break;
             case rtc::PeerConnection::State::Connecting:
                 std::cout << "Connecting" << std::endl;
+                std::cout << "⏳ WebRTC connection in progress for " << peer_id << std::endl;
                 break;
             case rtc::PeerConnection::State::Connected:
                 std::cout << "Connected" << std::endl;
@@ -63,10 +80,16 @@ std::shared_ptr<rtc::PeerConnection> WebRTCManager::createPeerConnection(const s
                 break;
             case rtc::PeerConnection::State::Disconnected:
                 std::cout << "Disconnected" << std::endl;
+                std::cout << "⚠️ WebRTC connection disconnected for " << peer_id << std::endl;
                 break;
             case rtc::PeerConnection::State::Failed:
                 std::cout << "Failed" << std::endl;
-                std::cout << "❌ WebRTC connection failed for " << peer_id << " - check network connectivity" << std::endl;
+                std::cout << "❌ WebRTC connection failed for " << peer_id << std::endl;
+                std::cout << "🔍 Possible causes:" << std::endl;
+                std::cout << "   - Network connectivity issues (firewall/NAT)" << std::endl;
+                std::cout << "   - STUN/TURN server unreachable" << std::endl;
+                std::cout << "   - ICE gathering timeout" << std::endl;
+                std::cout << "   - SDP incompatibility" << std::endl;
                 break;
             case rtc::PeerConnection::State::Closed:
                 std::cout << "Closed" << std::endl;
@@ -83,9 +106,11 @@ std::shared_ptr<rtc::PeerConnection> WebRTCManager::createPeerConnection(const s
                 break;
             case rtc::PeerConnection::GatheringState::InProgress:
                 std::cout << "In Progress" << std::endl;
+                std::cout << "⏳ Gathering ICE candidates from STUN/TURN servers..." << std::endl;
                 break;
             case rtc::PeerConnection::GatheringState::Complete:
                 std::cout << "Complete" << std::endl;
+                std::cout << "✅ ICE candidate gathering finished for " << peer_id << std::endl;
                 break;
         }
     });
@@ -190,8 +215,12 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
         try {
             // Create video media description with H264 codec
             rtc::Description::Video video("video", rtc::Description::Direction::SendOnly);
-            video.addH264Codec(96, "packetization-mode=1;level-asymmetry-allowed=1"); 
+            
+            // Add H264 codec with more compatible parameters
+            video.addH264Codec(96, "profile-level-id=42e01f;packetization-mode=1;level-asymmetry-allowed=1");
             video.setBitrate(1000); // 1 Mbps
+            
+            std::cout << "🎬 Video track config: H264 codec (PT=96), 1Mbps bitrate, SendOnly direction" << std::endl;
             
             auto video_track = pc->addTrack(video);
             video_tracks_[peer_id] = video_track;
@@ -223,12 +252,20 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
         std::cout << "📥 Step 5: Setting remote description using received offer" << std::endl;
         std::cout << "🔍 DEBUG: Received offer SDP length: " << offer_sdp.length() << " chars" << std::endl;
         
+        // Log received offer SDP for debugging
+        std::cout << "🔍 DEBUG: Offer SDP preview (first 200 chars):" << std::endl;
+        std::cout << offer_sdp.substr(0, 200) << "..." << std::endl;
+        
         try {
             rtc::Description offer(offer_sdp, rtc::Description::Type::Offer);
             pc->setRemoteDescription(offer);
             std::cout << "✅ Step 5 complete: Remote description set using received offer" << std::endl;
+            
+            // Log timing - answer should be generated within a few seconds
+            std::cout << "⏳ Waiting for answer generation (timeout in ~10 seconds)..." << std::endl;
         } catch (const std::exception& e) {
             std::cerr << "❌ Step 5 failed: " << e.what() << std::endl;
+            std::cerr << "🔍 Check if offer SDP format is compatible with libdatachannel" << std::endl;
             return false;
         }
         
