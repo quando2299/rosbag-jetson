@@ -146,9 +146,15 @@ void WebRTCManager::setupICEHandling(const std::string& peer_id, std::shared_ptr
     pc->onLocalDescription([this, peer_id](rtc::Description description) {
         std::cout << "📝 Step 5: Local description (answer) ready for " << peer_id << std::endl;
         
+        // Debug: Print SDP to check video track configuration
+        std::string sdp_answer = description;
+        std::cout << "🔍 DEBUG: Generated SDP Answer:" << std::endl;
+        std::cout << "--- SDP START ---" << std::endl;
+        std::cout << sdp_answer << std::endl;
+        std::cout << "--- SDP END ---" << std::endl;
+        
         // Step 6: Publish answer to MQTT
         std::string answer_topic = thing_name_ + "/robot-control/" + peer_id + "/answer";
-        std::string sdp_answer = description;
         
         if (publish_callback_) {
             publish_callback_(answer_topic, sdp_answer);
@@ -174,10 +180,13 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
         try {
             std::cout << "🎬 Adding video track to peer connection (step 3)" << std::endl;
             
-            // Create video media description with H264 codec
+            // Create video media description with H264 codec - match working robot_simulator
             rtc::Description::Video video("video", rtc::Description::Direction::SendOnly);
             video.addH264Codec(96, "packetization-mode=1;level-asymmetry-allowed=1"); 
             video.setBitrate(1000); // 1 Mbps
+            
+            // Add stream label to ensure proper media stream creation
+            video.addSSRC(12345678, "video-stream-1");
             
             auto video_track = pc->addTrack(video);
             video_tracks_[peer_id] = video_track;
