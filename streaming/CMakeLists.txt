@@ -22,24 +22,29 @@ if(NOT JSONCPP_FOUND)
     pkg_check_modules(JSONCPP QUIET libjsoncpp)
 endif()
 
-# Add executable
-add_executable(simple_video_server simple_video_server.cpp mongoose.c)
+# Enable WebRTC support
+add_definitions(-DWEBRTC_ENABLED)
+
+# Enable JSON support
+add_definitions(-DJSON_ENABLED)
+
+# Add executable for MQTT client
+add_executable(mqtt_client mqtt_client.cpp webrtc_manager.cpp)
 
 # Link libraries
-target_link_libraries(simple_video_server 
+target_link_libraries(mqtt_client 
     ${OpenCV_LIBS} 
     Threads::Threads
+    mosquitto
+    datachannel
 )
 
 # Add JSON support if available
 if(JSONCPP_FOUND)
-    target_link_libraries(simple_video_server ${JSONCPP_LIBRARIES})
-    target_include_directories(simple_video_server PRIVATE ${JSONCPP_INCLUDE_DIRS})
-    target_link_directories(simple_video_server PRIVATE ${JSONCPP_LIBRARY_DIRS})
+    target_link_libraries(mqtt_client ${JSONCPP_LIBRARIES})
+    target_include_directories(mqtt_client PRIVATE ${JSONCPP_INCLUDE_DIRS})
+    target_link_directories(mqtt_client PRIVATE ${JSONCPP_LIBRARY_DIRS})
     message(STATUS "JSON support enabled with jsoncpp")
 else()
     message(WARNING "JSON support disabled - jsoncpp not found")
 endif()
-
-# Compiler flags
-target_compile_definitions(simple_video_server PRIVATE MG_ENABLE_LINES)

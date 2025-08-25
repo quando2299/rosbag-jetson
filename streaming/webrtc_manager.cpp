@@ -97,11 +97,48 @@ std::shared_ptr<rtc::PeerConnection> WebRTCManager::createPeerConnection(const s
 }
 
 void WebRTCManager::setupICEHandling(const std::string& peer_id, std::shared_ptr<rtc::PeerConnection> pc) {
+    // Store local candidates for batching
+    static std::map<std::string, Json::Value> localCandidates;
+    
     pc->onLocalCandidate([this, peer_id](rtc::Candidate candidate) {
         std::cout << "🧊 Local ICE candidate for " << peer_id << ": " << candidate.candidate() << std::endl;
         
-        // In a real implementation, you might want to send ICE candidates separately
-        // For now, we'll include them in the answer
+        // Create candidate JSON object
+        Json::Value candidateJson;
+        candidateJson["candidate"] = candidate.candidate();
+        candidateJson["sdpMid"] = candidate.mid();
+        candidateJson["sdpMLineIndex"] = 0; // Default to 0, adjust as needed
+        
+        // Add to local candidates array for this peer
+        if (localCandidates.find(peer_id) == localCandidates.end()) {
+            localCandidates[peer_id] = Json::Value(Json::arrayValue);
+        }
+        localCandidates[peer_id].append(candidateJson);
+    });
+    
+    pc->onGatheringStateChange([this, peer_id](rtc::PeerConnection::GatheringState state) {
+        if (state == rtc::PeerConnection::GatheringState::Complete) {
+            std::cout << "🧊 Peer " << peer_id << " ICE gathering: Complete" << std::endl;
+            
+            // Publish all collected local ICE candidates to /rmcs topic
+            std::string rmcs_topic = thing_name_ + "/robot-control/" + peer_id + "/candidate/rmcs";
+            
+            // Get collected candidates for this peer
+            if (localCandidates.find(peer_id) != localCandidates.end()) {
+                Json::StreamWriterBuilder builder;
+                std::string candidatesStr = Json::writeString(builder, localCandidates[peer_id]);
+                
+                if (publish_callback_) {
+                    publish_callback_(rmcs_topic, candidatesStr);
+                    std::cout << "📤 Published " << localCandidates[peer_id].size() << " local ICE candidates to rmcs topic for " << peer_id << std::endl;
+                }
+                
+                // Clear candidates for this peer
+                localCandidates.erase(peer_id);
+            }
+        } else {
+            std::cout << "🧊 Peer " << peer_id << " ICE gathering: In Progress" << std::endl;
+        }
     });
     
     pc->onLocalDescription([this, peer_id](rtc::Description description) {
@@ -209,17 +246,8 @@ bool WebRTCManager::handleCandidates(const std::string& peer_id, const Json::Val
             }
         }
         
-        // Republish candidates to candidate/rmcs topic
-        std::string rmcs_topic = thing_name_ + "/robot-control/" + peer_id + "/candidate/rmcs";
-        
-        // Convert candidates back to JSON string for republishing
-        Json::StreamWriterBuilder builder;
-        std::string candidatesStr = Json::writeString(builder, candidates);
-        
-        if (publish_callback_) {
-            publish_callback_(rmcs_topic, candidatesStr);
-            std::cout << "📤 Republished " << candidates.size() << " ICE candidates to rmcs topic" << std::endl;
-        }
+        // Note: Remote candidates from Flutter are processed above and set on peer connection
+        // Local robot candidates are automatically published to /rmcs when generated
         
         return true;
         
@@ -590,8 +618,9 @@ bool WebRTCManager::isWebRTCEnabled() const {
     return true;
 }
 
-#else
+#endif
 
+#ifndef WEBRTC_ENABLED
 // Mock implementation when WebRTC is disabled
 MockWebRTCManager::MockWebRTCManager(const std::string& thing_name, PublishCallback publish_cb) 
     : thing_name_(thing_name), publish_callback_(publish_cb) {

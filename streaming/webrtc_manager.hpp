@@ -15,9 +15,7 @@
 #include <rtc/h264rtppacketizer.hpp>
 #endif
 
-#ifdef JSON_ENABLED
 #include <json/json.h>
-#endif
 
 class WebRTCManager {
 public:
@@ -82,7 +80,7 @@ private:
 };
 
 // Mock implementation when WebRTC is disabled
-#ifdef WEBRTC_DISABLED
+#ifndef WEBRTC_ENABLED
 class MockWebRTCManager {
 public:
     using PublishCallback = std::function<void(const std::string& topic, const std::string& message)>;
