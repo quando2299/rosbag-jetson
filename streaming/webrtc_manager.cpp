@@ -192,9 +192,15 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
                 std::cout << "✅ Video track opened for " << peer_id << std::endl;
                 
                 // Auto-start H264 video streaming when track opens
-                std::string video_file = "/Users/quando/dev/m2m/jetson/bag_processor/extracted_images_20250823_115613/flir_id8_image_resized_30fps.mp4";
-                std::cout << "🎬 Auto-starting H264 video streaming via WebRTC..." << std::endl;
-                this->startH264FileStreaming(peer_id, video_file);
+                // Look for video files in bag_processor directory
+                std::string video_file = this->findVideoFile();
+                if (!video_file.empty()) {
+                    std::cout << "🎬 Auto-starting H264 video streaming via WebRTC..." << std::endl;
+                    std::cout << "📹 Video file: " << video_file << std::endl;
+                    this->startH264FileStreaming(peer_id, video_file);
+                } else {
+                    std::cout << "⚠️ No video file found in bag_processor directory" << std::endl;
+                }
             });
             
             video_track->onClosed([peer_id]() {
@@ -618,6 +624,53 @@ bool WebRTCManager::startH264FileStreaming(const std::string& peer_id, const std
         std::cerr << "❌ Error starting H264 file streaming: " << e.what() << std::endl;
         return false;
     }
+}
+
+std::string WebRTCManager::findVideoFile() {
+    // Try common locations for bag_processor directory
+    std::vector<std::string> search_paths = {
+        "../bag_processor",           // When running from streaming directory
+        "../../bag_processor",         // When running from build directory
+        "/workspace/bag_processor",    // Docker container path
+        "./bag_processor"              // Current directory
+    };
+    
+    for (const auto& base_path : search_paths) {
+        // Look for extracted_images_* directories
+        std::vector<cv::String> dirs;
+        cv::glob(base_path + "/extracted_images_*", dirs);
+        
+        for (const auto& dir : dirs) {
+            // Look for MP4 files in each directory
+            std::vector<cv::String> videos;
+            cv::glob(dir + "/*.mp4", videos);
+            
+            if (!videos.empty()) {
+                std::cout << "🔍 Found " << videos.size() << " video files in " << dir << std::endl;
+                // Return the first video file found
+                return videos[0];
+            }
+        }
+    }
+    
+    // Fallback: try to find any MP4 file in common locations
+    std::vector<std::string> fallback_patterns = {
+        "../bag_processor/extracted_images*/*.mp4",
+        "../../bag_processor/extracted_images*/*.mp4",
+        "/workspace/bag_processor/extracted_images*/*.mp4"
+    };
+    
+    for (const auto& pattern : fallback_patterns) {
+        std::vector<cv::String> videos;
+        cv::glob(pattern, videos);
+        if (!videos.empty()) {
+            std::cout << "🔍 Found video file: " << videos[0] << std::endl;
+            return videos[0];
+        }
+    }
+    
+    std::cout << "⚠️ No video files found in bag_processor directories" << std::endl;
+    return "";
 }
 
 bool WebRTCManager::isWebRTCEnabled() const {

@@ -46,6 +46,9 @@ public:
     // Get status
     bool isWebRTCEnabled() const;
     
+    // Helper function to find video file
+    std::string findVideoFile();
+    
 private:
     std::string thing_name_;
     PublishCallback publish_callback_;
