@@ -568,10 +568,10 @@ bool WebRTCManager::startH264FileStreaming(const std::string& peer_id, const std
         
         std::cout << "🎬 Starting H264 file streaming: " << h264_file_path << std::endl;
         
-        // Read H264 file and send chunks
+        // Read H264/MP4 file
         std::ifstream file(h264_file_path, std::ios::binary);
         if (!file.is_open()) {
-            std::cout << "❌ Failed to open H264 file: " << h264_file_path << std::endl;
+            std::cout << "❌ Failed to open video file: " << h264_file_path << std::endl;
             return false;
         }
         
@@ -580,48 +580,61 @@ bool WebRTCManager::startH264FileStreaming(const std::string& peer_id, const std
         size_t file_size = file.tellg();
         file.seekg(0, std::ios::beg);
         
-        std::vector<uint8_t> h264_data(file_size);
-        file.read(reinterpret_cast<char*>(h264_data.data()), file_size);
+        std::vector<uint8_t> video_data(file_size);
+        file.read(reinterpret_cast<char*>(video_data.data()), file_size);
         file.close();
         
-        std::cout << "📁 Loaded H264 file (" << file_size << " bytes)" << std::endl;
+        std::cout << "📁 Loaded video file (" << file_size << " bytes)" << std::endl;
         
-        // Send in chunks at 30 FPS
-        const size_t chunk_size = file_size / 438; // Divide into frame-sized chunks
-        const auto frame_duration = std::chrono::milliseconds(1000 / 30);
+        // Extract NAL units from MP4 container
+        auto nal_units = extractNALUnits(video_data);
+        std::cout << "🔍 Extracted " << nal_units.size() << " NAL units from video file" << std::endl;
+        
+        if (nal_units.empty()) {
+            std::cout << "⚠️  No NAL units found in video file" << std::endl;
+            return false;
+        }
+        
+        const auto frame_duration = std::chrono::milliseconds(33); // 30 FPS
         
         streaming_active_[peer_id] = true;
-        streaming_threads_[peer_id] = std::thread([this, peer_id, h264_data, chunk_size, frame_duration, track]() {
+        streaming_threads_[peer_id] = std::thread([this, peer_id, nal_units, frame_duration, track]() {
             try {
-                size_t offset = 0;
-                int frame_num = 0;
+                int nal_count = 0;
                 auto& active = streaming_active_[peer_id];
                 
-                std::cout << "📤 Started sending H264 data at 30 FPS..." << std::endl;
+                std::cout << "📤 Started sending H264 NAL units via WebRTC..." << std::endl;
                 
-                while (active && offset < h264_data.size()) {
-                    size_t current_chunk_size = std::min(chunk_size, h264_data.size() - offset);
+                // Wait a bit for track to stabilize
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                
+                for (const auto& nal_unit : nal_units) {
+                    if (!active) break;
                     
-                    rtc::binary packet;
-                    packet.reserve(current_chunk_size);
-                    
-                    for (size_t i = 0; i < current_chunk_size; i++) {
-                        packet.push_back(static_cast<std::byte>(h264_data[offset + i]));
+                    try {
+                        if (track->isOpen()) {
+                            // Send NAL unit with proper RTP packetization
+                            sendNALUnit(track, nal_unit);
+                            
+                            if (nal_count % 10 == 0) {
+                                std::cout << "📤 Sent NAL unit " << nal_count << " (size: " << nal_unit.size() << " bytes)" << std::endl;
+                            }
+                        } else {
+                            std::cout << "⚠️ Track closed, stopping stream" << std::endl;
+                            break;
+                        }
+                    } catch (const std::exception& e) {
+                        std::cout << "⚠️ Error sending NAL unit: " << e.what() << std::endl;
+                        // Continue with next NAL unit
                     }
                     
-                    if (track->send(packet)) {
-                        // Success
-                    } else {
-                        std::cout << "⚠️  Failed to send H264 chunk" << std::endl;
-                    }
+                    nal_count++;
                     
-                    offset += current_chunk_size;
-                    frame_num++;
-                    
+                    // Frame rate control - send frames at 30 FPS
                     std::this_thread::sleep_for(frame_duration);
                 }
                 
-                std::cout << "✅ H264 streaming completed (" << frame_num << " chunks sent)" << std::endl;
+                std::cout << "✅ H264 NAL unit streaming completed (" << nal_count << " NAL units sent)" << std::endl;
                 
             } catch (const std::exception& e) {
                 std::cerr << "❌ Error in H264 streaming thread: " << e.what() << std::endl;
@@ -718,6 +731,173 @@ void WebRTCManager::startTestPatternStreaming(const std::string& peer_id) {
 
 bool WebRTCManager::isWebRTCEnabled() const {
     return true;
+}
+
+std::vector<std::vector<uint8_t>> WebRTCManager::extractNALUnits(const std::vector<uint8_t>& mp4_data) {
+    std::vector<std::vector<uint8_t>> nal_units;
+    
+    // Look for H.264 NAL unit start codes (0x00000001 or 0x000001)
+    for (size_t i = 0; i < mp4_data.size() - 4; ) {
+        // Check for 4-byte start code (0x00000001)
+        if (mp4_data[i] == 0x00 && mp4_data[i+1] == 0x00 && 
+            mp4_data[i+2] == 0x00 && mp4_data[i+3] == 0x01) {
+            
+            size_t start = i + 4; // Skip start code
+            size_t end = start;
+            
+            // Find next start code
+            bool found_next = false;
+            for (size_t j = start + 1; j < mp4_data.size() - 3; j++) {
+                if ((mp4_data[j] == 0x00 && mp4_data[j+1] == 0x00 && 
+                     mp4_data[j+2] == 0x00 && mp4_data[j+3] == 0x01) ||
+                    (mp4_data[j] == 0x00 && mp4_data[j+1] == 0x00 && 
+                     mp4_data[j+2] == 0x01)) {
+                    end = j;
+                    found_next = true;
+                    break;
+                }
+            }
+            
+            if (!found_next) {
+                end = mp4_data.size();
+            }
+            
+            // Extract NAL unit
+            if (end > start) {
+                std::vector<uint8_t> nal_unit(mp4_data.begin() + start, mp4_data.begin() + end);
+                
+                // Apply emulation prevention if needed
+                auto processed_nal = applyEmulationPrevention(nal_unit);
+                nal_units.push_back(processed_nal);
+                
+                std::cout << "🔍 Found NAL unit (type: " << (processed_nal[0] & 0x1F) 
+                         << ", size: " << processed_nal.size() << " bytes)" << std::endl;
+            }
+            
+            i = end;
+        }
+        // Check for 3-byte start code (0x000001)  
+        else if (mp4_data[i] == 0x00 && mp4_data[i+1] == 0x00 && mp4_data[i+2] == 0x01) {
+            
+            size_t start = i + 3; // Skip start code
+            size_t end = start;
+            
+            // Find next start code
+            bool found_next = false;
+            for (size_t j = start + 1; j < mp4_data.size() - 3; j++) {
+                if ((mp4_data[j] == 0x00 && mp4_data[j+1] == 0x00 && 
+                     mp4_data[j+2] == 0x00 && mp4_data[j+3] == 0x01) ||
+                    (mp4_data[j] == 0x00 && mp4_data[j+1] == 0x00 && 
+                     mp4_data[j+2] == 0x01)) {
+                    end = j;
+                    found_next = true;
+                    break;
+                }
+            }
+            
+            if (!found_next) {
+                end = mp4_data.size();
+            }
+            
+            // Extract NAL unit
+            if (end > start) {
+                std::vector<uint8_t> nal_unit(mp4_data.begin() + start, mp4_data.begin() + end);
+                
+                // Apply emulation prevention if needed
+                auto processed_nal = applyEmulationPrevention(nal_unit);
+                nal_units.push_back(processed_nal);
+                
+                std::cout << "🔍 Found NAL unit (type: " << (processed_nal[0] & 0x1F) 
+                         << ", size: " << processed_nal.size() << " bytes)" << std::endl;
+            }
+            
+            i = end;
+        } else {
+            i++;
+        }
+    }
+    
+    return nal_units;
+}
+
+std::vector<uint8_t> WebRTCManager::applyEmulationPrevention(const std::vector<uint8_t>& nal_unit) {
+    std::vector<uint8_t> result;
+    result.reserve(nal_unit.size() * 1.1); // Reserve a bit more space
+    
+    for (size_t i = 0; i < nal_unit.size(); i++) {
+        result.push_back(nal_unit[i]);
+        
+        // Check for emulation prevention pattern
+        if (i >= 1 && result.size() >= 2) {
+            size_t len = result.size();
+            // If we have 0x00 0x00 followed by 0x00, 0x01, 0x02, or 0x03
+            // we need to insert emulation prevention byte (0x03)
+            if (result[len-2] == 0x00 && result[len-1] == 0x00) {
+                if (i + 1 < nal_unit.size()) {
+                    uint8_t next_byte = nal_unit[i + 1];
+                    if (next_byte <= 0x03) {
+                        result.push_back(0x03); // Insert emulation prevention byte
+                        std::cout << "🔧 Applied emulation prevention at position " << i << std::endl;
+                    }
+                }
+            }
+        }
+    }
+    
+    return result;
+}
+
+void WebRTCManager::sendNALUnit(std::shared_ptr<rtc::Track> track, const std::vector<uint8_t>& nal_unit) {
+    if (!track || !track->isOpen() || nal_unit.empty()) {
+        return;
+    }
+    
+    try {
+        // Create packet with NAL unit start code + data
+        rtc::binary packet;
+        
+        // For WebRTC H.264, we need proper NAL unit format
+        // Add 4-byte start code (0x00000001) followed by NAL unit data
+        packet.reserve(nal_unit.size() + 4);
+        
+        // Add NAL unit start code
+        packet.push_back(static_cast<std::byte>(0x00));
+        packet.push_back(static_cast<std::byte>(0x00));
+        packet.push_back(static_cast<std::byte>(0x00));
+        packet.push_back(static_cast<std::byte>(0x01));
+        
+        // Add NAL unit payload
+        for (uint8_t byte : nal_unit) {
+            packet.push_back(static_cast<std::byte>(byte));
+        }
+        
+        // Send the formatted NAL unit
+        if (track->send(packet)) {
+            // Identify NAL unit type for logging
+            uint8_t nal_type = nal_unit[0] & 0x1F;
+            const char* nal_type_name = "Unknown";
+            switch (nal_type) {
+                case 1: nal_type_name = "Non-IDR"; break;
+                case 5: nal_type_name = "IDR"; break;
+                case 6: nal_type_name = "SEI"; break;
+                case 7: nal_type_name = "SPS"; break;
+                case 8: nal_type_name = "PPS"; break;
+                case 9: nal_type_name = "AU Delimiter"; break;
+            }
+            
+            static int sent_count = 0;
+            if (sent_count % 30 == 0) {  // Log every 30th NAL unit to reduce noise
+                std::cout << "📤 Sent NAL unit (type " << (int)nal_type << "-" << nal_type_name 
+                         << ", size: " << packet.size() << " bytes)" << std::endl;
+            }
+            sent_count++;
+        } else {
+            std::cout << "⚠️ Failed to send NAL unit via track" << std::endl;
+        }
+        
+    } catch (const std::exception& e) {
+        std::cerr << "❌ Error sending NAL unit: " << e.what() << std::endl;
+    }
 }
 
 #endif

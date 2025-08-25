@@ -12,7 +12,6 @@
 #include <fstream>
 #include <vector>
 #include <opencv2/opencv.hpp>
-#include <rtc/h264rtppacketizer.hpp>
 #endif
 
 #include <json/json.h>
@@ -82,6 +81,11 @@ private:
     cv::Mat loadAndResizeImage(const std::string& image_path);
     void sendH264Frame(std::shared_ptr<rtc::Track> track, const cv::Mat& frame);
     std::vector<uint8_t> encodeFrameToH264(const cv::Mat& frame);
+    
+    // H.264 NAL unit processing
+    std::vector<std::vector<uint8_t>> extractNALUnits(const std::vector<uint8_t>& mp4_data);
+    std::vector<uint8_t> applyEmulationPrevention(const std::vector<uint8_t>& nal_unit);
+    void sendNALUnit(std::shared_ptr<rtc::Track> track, const std::vector<uint8_t>& nal_unit);
 #endif
 };
 
