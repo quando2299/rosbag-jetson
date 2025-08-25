@@ -49,6 +49,36 @@ private:
     std::vector<TopicInfo> image_topics_;
     std::map<std::string, std::string> topic_directories_;
     std::map<std::string, int> extraction_counts_;
+    
+    bool convertImagesToVideo(const std::string& images_dir, const std::string& output_video_path) {
+        std::cout << "🎬 Converting images to H264 video..." << std::endl;
+        std::cout << "  Input: " << images_dir << std::endl;
+        std::cout << "  Output: " << output_video_path << std::endl;
+        
+        // ffmpeg command to convert images to H264 MP4 at 30fps
+        std::ostringstream cmd;
+        cmd << "ffmpeg -y "  // -y to overwrite output file
+            << "-framerate 30 "  // Input framerate
+            << "-pattern_type glob "  // Use glob pattern
+            << "-i '" << images_dir << "/*.jpg' "  // Input pattern
+            << "-vf 'scale=trunc(iw/2)*2:trunc(ih/2)*2' "  // Ensure even dimensions
+            << "-c:v libx264 "  // H264 codec
+            << "-pix_fmt yuv420p "  // Pixel format
+            << "-r 30 "  // Output framerate  
+            << "'" << output_video_path << "'";
+        
+        std::cout << "Running: " << cmd.str() << std::endl;
+        
+        int result = system(cmd.str().c_str());
+        
+        if (result == 0) {
+            std::cout << "✅ Video conversion successful: " << output_video_path << std::endl;
+            return true;
+        } else {
+            std::cout << "❌ Video conversion failed (exit code: " << result << ")" << std::endl;
+            return false;
+        }
+    }
 
     // Helper function to replace filesystem functionality
     bool file_exists(const std::string& path) {
@@ -340,8 +370,35 @@ public:
             return false;
         }
 
+        // Step 4: Convert images to videos
+        std::cout << std::endl << "=== CONVERTING IMAGES TO VIDEOS ===" << std::endl;
+        
+        bool all_conversions_success = true;
+        for (const auto& topic_dir_pair : topic_directories_) {
+            const std::string& topic_name = topic_dir_pair.first;
+            const std::string& images_dir = topic_dir_pair.second;
+            
+            // Generate output video filename based on directory name
+            std::string dir_name = boost::filesystem::path(images_dir).filename().string();
+            std::string video_filename = dir_name + "_30fps.mp4";
+            std::string output_video_path = output_dir_ + "/" + video_filename;
+            
+            std::cout << std::endl << "Converting topic: " << topic_name << std::endl;
+            
+            if (!convertImagesToVideo(images_dir, output_video_path)) {
+                std::cout << "⚠️  Video conversion failed for " << topic_name << std::endl;
+                all_conversions_success = false;
+            }
+        }
+
         std::cout << std::endl << "✅ Bag processing completed successfully!" << std::endl;
         std::cout << "Images extracted to: " << output_dir_ << std::endl;
+        
+        if (all_conversions_success) {
+            std::cout << "✅ All videos converted successfully!" << std::endl;
+        } else {
+            std::cout << "⚠️  Some video conversions failed" << std::endl;
+        }
         
         return true;
     }

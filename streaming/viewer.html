@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Image Stream Viewer</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f0f0f0;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        .controls {
+            text-align: center;
+            margin: 20px 0;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            font-size: 16px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .start { background: #4CAF50; color: white; }
+        .stop { background: #f44336; color: white; }
+        .connect { background: #2196F3; color: white; }
+        button:disabled { background: #ccc; }
+        .status {
+            text-align: center;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        .connected { background: #d4edda; color: #155724; }
+        .disconnected { background: #f8d7da; color: #721c24; }
+        .streaming { background: #d1ecf1; color: #0c5460; }
+        #imageDisplay {
+            text-align: center;
+            margin: 20px 0;
+        }
+        #imageCanvas {
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            max-width: 100%;
+        }
+        .stats {
+            display: flex;
+            justify-content: space-around;
+            margin: 20px 0;
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+        }
+        .stat {
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #007bff;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #6c757d;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 JPEG Image Stream Viewer (20 FPS)</h1>
+        
+        <div id="status" class="status disconnected">❌ Disconnected</div>
+        
+        <div class="controls">
+            <button id="connectBtn" class="connect" onclick="connect()">Connect</button>
+            <button id="startBtn" class="start" onclick="startStream()" disabled>Start Stream</button>
+            <button id="stopBtn" class="stop" onclick="stopStream()" disabled>Stop Stream</button>
+        </div>
+        
+        <div id="imageDisplay">
+            <canvas id="imageCanvas" width="640" height="480"></canvas>
+        </div>
+        
+        <div class="stats">
+            <div class="stat">
+                <div id="frameCount" class="stat-value">0</div>
+                <div class="stat-label">Frames</div>
+            </div>
+            <div class="stat">
+                <div id="fps" class="stat-value">0</div>
+                <div class="stat-label">FPS</div>
+            </div>
+            <div class="stat">
+                <div id="dataSize" class="stat-value">0</div>
+                <div class="stat-label">KB Received</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let canvas = document.getElementById('imageCanvas');
+        let ctx = canvas.getContext('2d');
+        let frameCount = 0;
+        let totalDataSize = 0;
+        let fpsCount = 0;
+        let lastFpsTime = Date.now();
+        let reconnectTimeout = null;
+        let isReconnecting = false;
+
+        function updateStatus(text, className) {
+            const status = document.getElementById('status');
+            status.textContent = text;
+            status.className = 'status ' + className;
+        }
+
+        function connect() {
+            ws = new WebSocket('ws://localhost:8080/ws');
+            ws.binaryType = 'arraybuffer';
+            
+            ws.onopen = function() {
+                console.log('Connected');
+                updateStatus('✅ Connected', 'connected');
+                document.getElementById('connectBtn').disabled = true;
+                document.getElementById('startBtn').disabled = false;
+            };
+            
+            ws.onmessage = function(event) {
+                if (typeof event.data === 'string') {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'ping') {
+                        // Respond to ping with pong
+                        ws.send('{"type":"pong"}');
+                    } else {
+                        console.log('Text message:', event.data);
+                    }
+                } else {
+                    // Binary data - JPEG image
+                    displayImage(event.data);
+                }
+            };
+            
+            ws.onclose = function() {
+                console.log('Disconnected');
+                updateStatus('🔄 Auto-reconnecting...', 'disconnected');
+                document.getElementById('startBtn').disabled = true;
+                document.getElementById('stopBtn').disabled = true;
+                
+                // Auto-reconnect after 2 seconds
+                if (!isReconnecting) {
+                    isReconnecting = true;
+                    reconnectTimeout = setTimeout(function() {
+                        isReconnecting = false;
+                        connect();
+                    }, 2000);
+                }
+            };
+            
+            ws.onerror = function(error) {
+                console.log('Error:', error);
+            };
+        }
+
+        function startStream() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send('{"type":"start_stream"}');
+                updateStatus('📺 Streaming...', 'streaming');
+                document.getElementById('startBtn').disabled = true;
+                document.getElementById('stopBtn').disabled = false;
+                
+                // Reset counters
+                frameCount = 0;
+                totalDataSize = 0;
+                fpsCount = 0;
+                lastFpsTime = Date.now();
+            }
+        }
+
+        function stopStream() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send('{"type":"stop_stream"}');
+                updateStatus('✅ Connected', 'connected');
+                document.getElementById('startBtn').disabled = false;
+                document.getElementById('stopBtn').disabled = true;
+            }
+        }
+
+        function displayImage(arrayBuffer) {
+            const blob = new Blob([arrayBuffer], {type: 'image/jpeg'});
+            const url = URL.createObjectURL(blob);
+            
+            const img = new Image();
+            img.onload = function() {
+                // Clear canvas and draw image
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                URL.revokeObjectURL(url);
+                
+                // Update stats
+                frameCount++;
+                totalDataSize += arrayBuffer.byteLength;
+                fpsCount++;
+                
+                document.getElementById('frameCount').textContent = frameCount;
+                document.getElementById('dataSize').textContent = Math.round(totalDataSize / 1024);
+                
+                // Calculate FPS
+                const now = Date.now();
+                if (now - lastFpsTime >= 1000) {
+                    document.getElementById('fps').textContent = fpsCount;
+                    fpsCount = 0;
+                    lastFpsTime = now;
+                }
+            };
+            img.src = url;
+        }
+    </script>
+</body>
+</html>

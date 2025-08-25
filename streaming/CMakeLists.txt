@@ -1,16 +1,13 @@
 cmake_minimum_required(VERSION 3.10)
-project(mqtt_streaming)
+project(simple_video_server)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(MOSQUITTO REQUIRED libmosquitto)
-
 # Find OpenCV
 find_package(OpenCV REQUIRED)
 
-# Find Threads (needed for std::thread)
+# Find Threads
 find_package(Threads REQUIRED)
 
 # Find JSON library
@@ -25,47 +22,24 @@ if(NOT JSONCPP_FOUND)
     pkg_check_modules(JSONCPP QUIET libjsoncpp)
 endif()
 
-# Find libdatachannel (WebRTC library)
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-    pkg_check_modules(DATACHANNEL QUIET libdatachannel)
-endif()
+# Add executable
+add_executable(simple_video_server simple_video_server.cpp mongoose.c)
 
-# If libdatachannel not found via pkg-config, try find_package
-if(NOT DATACHANNEL_FOUND)
-    find_package(LibDataChannel QUIET)
-    if(LibDataChannel_FOUND)
-        set(DATACHANNEL_LIBRARIES LibDataChannel::LibDataChannel)
-        set(DATACHANNEL_FOUND TRUE)
-    endif()
-endif()
-
-add_executable(mqtt_client mqtt_client.cpp webrtc_manager.cpp)
-
-target_link_libraries(mqtt_client ${MOSQUITTO_LIBRARIES} ${OpenCV_LIBS} Threads::Threads)
-target_include_directories(mqtt_client PRIVATE ${MOSQUITTO_INCLUDE_DIRS})
-target_compile_options(mqtt_client PRIVATE ${MOSQUITTO_CFLAGS_OTHER})
-target_link_directories(mqtt_client PRIVATE ${MOSQUITTO_LIBRARY_DIRS})
+# Link libraries
+target_link_libraries(simple_video_server 
+    ${OpenCV_LIBS} 
+    Threads::Threads
+)
 
 # Add JSON support if available
 if(JSONCPP_FOUND)
-    target_link_libraries(mqtt_client ${JSONCPP_LIBRARIES})
-    target_include_directories(mqtt_client PRIVATE ${JSONCPP_INCLUDE_DIRS})
-    target_link_directories(mqtt_client PRIVATE ${JSONCPP_LIBRARY_DIRS})
-    target_compile_definitions(mqtt_client PRIVATE JSON_ENABLED)
+    target_link_libraries(simple_video_server ${JSONCPP_LIBRARIES})
+    target_include_directories(simple_video_server PRIVATE ${JSONCPP_INCLUDE_DIRS})
+    target_link_directories(simple_video_server PRIVATE ${JSONCPP_LIBRARY_DIRS})
     message(STATUS "JSON support enabled with jsoncpp")
 else()
-    target_compile_definitions(mqtt_client PRIVATE JSON_DISABLED)
     message(WARNING "JSON support disabled - jsoncpp not found")
 endif()
 
-# Add WebRTC support if available
-if(DATACHANNEL_FOUND)
-    target_link_libraries(mqtt_client ${DATACHANNEL_LIBRARIES})
-    target_include_directories(mqtt_client PRIVATE ${DATACHANNEL_INCLUDE_DIRS})
-    target_compile_definitions(mqtt_client PRIVATE WEBRTC_ENABLED)
-    message(STATUS "WebRTC support enabled with libdatachannel")
-else()
-    target_compile_definitions(mqtt_client PRIVATE WEBRTC_DISABLED)
-    message(WARNING "WebRTC support disabled - libdatachannel not found")
-endif()
+# Compiler flags
+target_compile_definitions(simple_video_server PRIVATE MG_ENABLE_LINES)

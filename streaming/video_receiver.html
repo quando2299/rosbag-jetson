@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Complete H.264 Video Receiver</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 1000px; margin: 0 auto; }
+        h1 { color: #333; }
+        #videoPlayer { width: 640px; height: 480px; background: #000; }
+        .status { padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .connected { background: #d4edda; color: #155724; }
+        .log { background: #f8f9fa; padding: 15px; max-height: 300px; overflow-y: auto; font-family: monospace; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎬 Complete H.264 Video Receiver</h1>
+        <div id="status" class="status">Connecting...</div>
+        
+        <div style="text-align: center; margin: 20px 0;">
+            <button id="requestBtn" onclick="requestVideo()" disabled style="padding: 10px 20px; font-size: 16px; background: #28a745; color: white; border: none; border-radius: 5px;">
+                🎬 Request H.264 Video
+            </button>
+        </div>
+        
+        <video id="videoPlayer" controls autoplay>
+            Your browser does not support the video tag.
+        </video>
+        
+        <div class="log" id="log"></div>
+    </div>
+
+    <script>
+        let ws = null;
+        let videoPlayer = document.getElementById('videoPlayer');
+        
+        function log(message, color = 'black') {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `<span style="color: ${color}">[${timestamp}] ${message}</span><br>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        function connectToServer() {
+            log('🔌 Connecting to WebSocket server...');
+            
+            ws = new WebSocket('ws://localhost:8080/ws');
+            ws.binaryType = 'arraybuffer';
+            
+            ws.onopen = function(event) {
+                log('✅ Connected to WebSocket server', 'green');
+                document.getElementById('status').innerHTML = '✅ Connected - Waiting for H.264 video...';
+                document.getElementById('status').className = 'status connected';
+                
+                // Register as Flutter client
+                const registerMsg = {
+                    type: 'client_type',
+                    clientType: 'flutter'
+                };
+                ws.send(JSON.stringify(registerMsg));
+                log('📤 Registered as video receiver');
+                
+                // Enable request button
+                document.getElementById('requestBtn').disabled = false;
+            };
+            
+            let pendingVideoMetadata = null;
+            
+            ws.onmessage = function(event) {
+                if (typeof event.data === 'string') {
+                    try {
+                        const data = JSON.parse(event.data);
+                        
+                        if (data.type === 'complete_video') {
+                            pendingVideoMetadata = data;
+                            log(`🎬 Receiving H.264 video: ${data.filename}`, 'blue');
+                            log(`📊 Size: ${(data.size / (1024 * 1024)).toFixed(1)} MB`, 'blue');
+                            log(`🔧 Format: ${data.format}, Codec: ${data.codec}`, 'blue');
+                        } else {
+                            log(`📨 Server: ${JSON.stringify(data)}`, 'green');
+                        }
+                    } catch (e) {
+                        log(`📨 Text: ${event.data}`, 'green');
+                    }
+                } else {
+                    // Binary data - complete video file
+                    if (pendingVideoMetadata) {
+                        handleCompleteVideo(event.data, pendingVideoMetadata);
+                        pendingVideoMetadata = null;
+                    }
+                }
+            };
+            
+            ws.onclose = function(event) {
+                log('❌ Connection closed', 'red');
+            };
+        }
+        
+        function handleCompleteVideo(arrayBuffer, metadata) {
+            log(`📺 Received complete H.264 video: ${arrayBuffer.byteLength} bytes`, 'green');
+            
+            // Create blob from complete video file
+            const videoBlob = new Blob([arrayBuffer], { type: 'video/mp4' });
+            const videoUrl = URL.createObjectURL(videoBlob);
+            
+            // Set video source and play
+            videoPlayer.src = videoUrl;
+            videoPlayer.load();
+            
+            videoPlayer.onloadeddata = function() {
+                log('✅ H.264 Video loaded and playing!', 'green');
+                log(`🎬 Video duration: ${videoPlayer.duration.toFixed(1)} seconds`, 'blue');
+                videoPlayer.play().catch(e => {
+                    log('❌ Autoplay failed - click play button', 'red');
+                });
+            };
+            
+            videoPlayer.onerror = function(e) {
+                log('❌ Video playback error', 'red');
+            };
+        }
+        
+        function requestVideo() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const streamRequest = {
+                    type: 'request_stream',
+                    format: 'h264',
+                    timestamp: new Date().toISOString()
+                };
+                
+                ws.send(JSON.stringify(streamRequest));
+                log('▶️ Requested H.264 video from server', 'blue');
+                
+                document.getElementById('requestBtn').disabled = true;
+                document.getElementById('requestBtn').textContent = '⏳ Requesting...';
+            }
+        }
+        
+        // Auto-connect when page loads
+        window.onload = function() {
+            log('🚀 H.264 Video Receiver initialized');
+            connectToServer();
+        };
+    </script>
+</body>
+</html>

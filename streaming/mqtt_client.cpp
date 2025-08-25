@@ -184,16 +184,7 @@ private:
                         // Use WebRTC manager to handle the offer
                         if (webrtc_manager && webrtc_manager->handleOffer(peer_id, offer_sdp)) {
                             std::cout << "✅ WebRTC offer handled successfully for " << peer_id << std::endl;
-                            
-                            // Start live image streaming from directory
-                            std::string images_dir = "images/flir_id8_image_resized";
-                            
-                            std::cout << "🎥 Starting live image streaming from: " << images_dir << std::endl;
-                            if (webrtc_manager->startVideoStreaming(peer_id, images_dir)) {
-                                std::cout << "✅ Video streaming started for " << peer_id << std::endl;
-                            } else {
-                                std::cout << "⚠️  Failed to start video streaming for " << peer_id << std::endl;
-                            }
+                            std::cout << "⏳ Video streaming will start automatically when connection is established" << std::endl;
                         } else {
                             std::cout << "⚠️  WebRTC offer handling failed for " << peer_id << std::endl;
                             // Fallback to simple answer

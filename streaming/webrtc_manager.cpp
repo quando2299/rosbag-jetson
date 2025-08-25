@@ -46,7 +46,7 @@ std::shared_ptr<rtc::PeerConnection> WebRTCManager::createPeerConnection(const s
     auto pc = std::make_shared<rtc::PeerConnection>(config);
     
     // Set up connection state callback
-    pc->onStateChange([peer_id](rtc::PeerConnection::State state) {
+    pc->onStateChange([this, peer_id](rtc::PeerConnection::State state) {
         std::cout << "🔗 Peer " << peer_id << " connection state: ";
         switch (state) {
             case rtc::PeerConnection::State::New:
@@ -57,6 +57,8 @@ std::shared_ptr<rtc::PeerConnection> WebRTCManager::createPeerConnection(const s
                 break;
             case rtc::PeerConnection::State::Connected:
                 std::cout << "Connected" << std::endl;
+                std::cout << "✅ WebRTC connection established for " << peer_id << std::endl;
+                std::cout << "🎯 Ready for video streaming via WebSocket" << std::endl;
                 break;
             case rtc::PeerConnection::State::Disconnected:
                 std::cout << "Disconnected" << std::endl;
@@ -266,9 +268,27 @@ bool WebRTCManager::startVideoStreaming(const std::string& peer_id, const std::s
             return false;
         }
         
-        // Start streaming in background thread
+        // Wait for track to be ready before starting streaming
+        auto track = track_it->second;
+        std::cout << "⏳ Waiting for video track to be ready..." << std::endl;
+        
+        // Start streaming in background thread with track readiness check
         streaming_active_[peer_id] = true;
-        streaming_threads_[peer_id] = std::thread(&WebRTCManager::streamImagesFromDirectory, this, peer_id, images_dir_path);
+        streaming_threads_[peer_id] = std::thread([this, peer_id, images_dir_path, track]() {
+            // Wait for track to be open
+            int wait_count = 0;
+            while (wait_count < 50 && !track->isOpen()) {  // Wait up to 5 seconds
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                wait_count++;
+            }
+            
+            if (track->isOpen()) {
+                std::cout << "✅ Track is ready, starting streaming..." << std::endl;
+                this->streamImagesFromDirectory(peer_id, images_dir_path);
+            } else {
+                std::cout << "❌ Track failed to open within timeout" << std::endl;
+            }
+        });
         
         return true;
         
@@ -346,8 +366,10 @@ void WebRTCManager::streamImagesFromDirectory(const std::string& peer_id, const 
             // Send frame
             sendH264Frame(track, frame);
             
-            std::cout << "📤 Sent frame " << (frame_count + 1) << "/" << image_files.size() 
-                      << " (" << frame.cols << "x" << frame.rows << ")" << std::endl;
+            // Only log first and last frame
+            if (frame_count == 0) {
+                std::cout << "📤 Started sending frames (" << frame.cols << "x" << frame.rows << ") at 30 FPS..." << std::endl;
+            }
             
             frame_count++;
             
@@ -414,19 +436,26 @@ void WebRTCManager::sendH264Frame(std::shared_ptr<rtc::Track> track, const cv::M
         return;
     }
     
+    if (!track->isOpen()) {
+        std::cout << "⚠️  Track is not open" << std::endl;
+        return;
+    }
+    
     try {
-        // Encode frame to H264
-        auto h264_data = encodeFrameToH264(frame);
-        if (h264_data.empty()) {
-            std::cout << "⚠️  Failed to encode frame to H264" << std::endl;
+        // Encode frame as JPEG for WebRTC (simpler approach)
+        std::vector<uchar> encoded_image;
+        std::vector<int> compression_params = {cv::IMWRITE_JPEG_QUALITY, 80};
+        
+        if (!cv::imencode(".jpg", frame, encoded_image, compression_params)) {
+            std::cout << "⚠️  Failed to encode frame" << std::endl;
             return;
         }
         
-        // Send as binary data (simplified approach)
+        // Convert to rtc::binary
         rtc::binary packet;
-        packet.reserve(h264_data.size());
+        packet.reserve(encoded_image.size());
         
-        for (const auto& byte : h264_data) {
+        for (const auto& byte : encoded_image) {
             packet.push_back(static_cast<std::byte>(byte));
         }
         
@@ -465,6 +494,96 @@ std::vector<uint8_t> WebRTCManager::encodeFrameToH264(const cv::Mat& frame) {
     }
     
     return h264_data;
+}
+
+bool WebRTCManager::startH264FileStreaming(const std::string& peer_id, const std::string& h264_file_path) {
+    try {
+        auto it = peer_connections_.find(peer_id);
+        if (it == peer_connections_.end()) {
+            std::cout << "⚠️  No peer connection found for " << peer_id << std::endl;
+            return false;
+        }
+        
+        auto track_it = video_tracks_.find(peer_id);
+        if (track_it == video_tracks_.end()) {
+            std::cout << "⚠️  No video track found for " << peer_id << std::endl;
+            return false;
+        }
+        
+        auto track = track_it->second;
+        if (!track || !track->isOpen()) {
+            std::cout << "⚠️  Track is not ready for " << peer_id << std::endl;
+            return false;
+        }
+        
+        std::cout << "🎬 Starting H264 file streaming: " << h264_file_path << std::endl;
+        
+        // Read H264 file and send chunks
+        std::ifstream file(h264_file_path, std::ios::binary);
+        if (!file.is_open()) {
+            std::cout << "❌ Failed to open H264 file: " << h264_file_path << std::endl;
+            return false;
+        }
+        
+        // Read entire file
+        file.seekg(0, std::ios::end);
+        size_t file_size = file.tellg();
+        file.seekg(0, std::ios::beg);
+        
+        std::vector<uint8_t> h264_data(file_size);
+        file.read(reinterpret_cast<char*>(h264_data.data()), file_size);
+        file.close();
+        
+        std::cout << "📁 Loaded H264 file (" << file_size << " bytes)" << std::endl;
+        
+        // Send in chunks at 30 FPS
+        const size_t chunk_size = file_size / 438; // Divide into frame-sized chunks
+        const auto frame_duration = std::chrono::milliseconds(1000 / 30);
+        
+        streaming_active_[peer_id] = true;
+        streaming_threads_[peer_id] = std::thread([this, peer_id, h264_data, chunk_size, frame_duration, track]() {
+            try {
+                size_t offset = 0;
+                int frame_num = 0;
+                auto& active = streaming_active_[peer_id];
+                
+                std::cout << "📤 Started sending H264 data at 30 FPS..." << std::endl;
+                
+                while (active && offset < h264_data.size()) {
+                    size_t current_chunk_size = std::min(chunk_size, h264_data.size() - offset);
+                    
+                    rtc::binary packet;
+                    packet.reserve(current_chunk_size);
+                    
+                    for (size_t i = 0; i < current_chunk_size; i++) {
+                        packet.push_back(static_cast<std::byte>(h264_data[offset + i]));
+                    }
+                    
+                    if (track->send(packet)) {
+                        // Success
+                    } else {
+                        std::cout << "⚠️  Failed to send H264 chunk" << std::endl;
+                    }
+                    
+                    offset += current_chunk_size;
+                    frame_num++;
+                    
+                    std::this_thread::sleep_for(frame_duration);
+                }
+                
+                std::cout << "✅ H264 streaming completed (" << frame_num << " chunks sent)" << std::endl;
+                
+            } catch (const std::exception& e) {
+                std::cerr << "❌ Error in H264 streaming thread: " << e.what() << std::endl;
+            }
+        });
+        
+        return true;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "❌ Error starting H264 file streaming: " << e.what() << std::endl;
+        return false;
+    }
 }
 
 bool WebRTCManager::isWebRTCEnabled() const {

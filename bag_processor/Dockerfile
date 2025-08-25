@@ -34,9 +34,10 @@ RUN apt-get update && apt-get install -y \
     libopencv-contrib-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Boost
+# Install Boost and FFmpeg
 RUN apt-get update && apt-get install -y \
     libboost-all-dev \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory

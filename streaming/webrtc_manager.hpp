@@ -12,6 +12,7 @@
 #include <fstream>
 #include <vector>
 #include <opencv2/opencv.hpp>
+#include <rtc/h264rtppacketizer.hpp>
 #endif
 
 #ifdef JSON_ENABLED
@@ -37,6 +38,9 @@ public:
     
     // Start live image streaming
     bool startVideoStreaming(const std::string& peer_id, const std::string& images_dir_path);
+    
+    // Start H264 file streaming
+    bool startH264FileStreaming(const std::string& peer_id, const std::string& h264_file_path);
     
     // Stop video streaming
     void stopVideoStreaming(const std::string& peer_id);
