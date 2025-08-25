@@ -188,8 +188,13 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
             video_tracks_[peer_id] = video_track;
             
             // Set up track callbacks
-            video_track->onOpen([peer_id]() {
+            video_track->onOpen([this, peer_id]() {
                 std::cout << "✅ Video track opened for " << peer_id << std::endl;
+                
+                // Auto-start H264 video streaming when track opens
+                std::string video_file = "/Users/quando/dev/m2m/jetson/bag_processor/extracted_images_20250823_115613/flir_id8_image_resized_30fps.mp4";
+                std::cout << "🎬 Auto-starting H264 video streaming via WebRTC..." << std::endl;
+                this->startH264FileStreaming(peer_id, video_file);
             });
             
             video_track->onClosed([peer_id]() {
