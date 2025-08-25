@@ -278,6 +278,18 @@ public:
         
         std::cout << "✅ Pipeline created and paused for peer: " << peer_id << std::endl;
         
+        // Set pipeline to PLAYING first so transceivers can be created automatically
+        GstStateChangeReturn ret_play = gst_element_set_state(pipeline, GST_STATE_PLAYING);
+        if (ret_play == GST_STATE_CHANGE_FAILURE) {
+            std::cerr << "❌ Failed to set pipeline to PLAYING" << std::endl;
+            return;
+        }
+        
+        std::cout << "▶️  Pipeline set to PLAYING state" << std::endl;
+        
+        // Wait a moment for pipeline to stabilize
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        
         // Now set remote description (offer)
         setRemoteDescription(sdp_offer);
     }
@@ -322,10 +334,6 @@ public:
                     std::cerr << "❌ Failed to set remote description: " << error->message << std::endl;
                 } else {
                     std::cout << "✅ Remote description set successfully" << std::endl;
-                    
-                    // Start pipeline to PLAYING state
-                    gst_element_set_state(self->pipeline, GST_STATE_PLAYING);
-                    std::cout << "▶️  Pipeline set to PLAYING state" << std::endl;
                     
                     // Create answer
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
