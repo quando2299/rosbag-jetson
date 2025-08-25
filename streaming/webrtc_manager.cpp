@@ -144,18 +144,18 @@ void WebRTCManager::setupICEHandling(const std::string& peer_id, std::shared_ptr
     });
     
     pc->onLocalDescription([this, peer_id](rtc::Description description) {
-        std::cout << "📤 Local description ready for " << peer_id << std::endl;
+        std::cout << "📝 Step 5: Local description (answer) ready for " << peer_id << std::endl;
         
-        // Publish answer to MQTT
+        // Step 6: Publish answer to MQTT
         std::string answer_topic = thing_name_ + "/robot-control/" + peer_id + "/answer";
-        
-        // Publish raw SDP answer (to match the format from response.md)
         std::string sdp_answer = description;
         
         if (publish_callback_) {
             publish_callback_(answer_topic, sdp_answer);
-            std::cout << "✅ Raw SDP answer published for peer " << peer_id << std::endl;
+            std::cout << "✅ Step 5 & 6 Complete: Answer created and published to " << answer_topic << std::endl;
             std::cout << "📄 Answer SDP length: " << sdp_answer.length() << " characters" << std::endl;
+        } else {
+            std::cerr << "❌ Step 6 Failed: No publish callback available" << std::endl;
         }
     });
 }
@@ -170,20 +170,12 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
         // Store the peer connection
         peer_connections_[peer_id] = pc;
         
-        // Parse and set remote description
-        rtc::Description offer(offer_sdp, rtc::Description::Type::Offer);
-        pc->setRemoteDescription(offer);
-        
-        std::cout << "📥 Remote description set for " << peer_id << std::endl;
-        
-        // Now add video track after remote description is set
+        // Step 3: ADD VIDEO STREAM to PeerConnection FIRST (before setting remote description)
         try {
-            std::cout << "🎬 Adding video track to peer connection" << std::endl;
+            std::cout << "🎬 Adding video track to peer connection (step 3)" << std::endl;
             
-            // Create video media description with H264 codec - match robot_simulator format
+            // Create video media description with H264 codec
             rtc::Description::Video video("video", rtc::Description::Direction::SendOnly);
-            
-            // Use same H264 codec parameters as robot_simulator
             video.addH264Codec(96, "packetization-mode=1;level-asymmetry-allowed=1"); 
             video.setBitrate(1000); // 1 Mbps
             
@@ -194,22 +186,17 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
             video_track->onOpen([this, peer_id]() {
                 std::cout << "✅ Video track opened for " << peer_id << std::endl;
                 
-                // Start video streaming in a separate thread to avoid blocking
+                // Start video streaming when track opens
                 std::thread([this, peer_id]() {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(500)); // Small delay to ensure track is ready
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
                     
-                    // Auto-start H264 video streaming when track opens
-                    // Look for video files in bag_processor directory
                     std::string video_file = this->findVideoFile();
                     if (!video_file.empty()) {
-                        std::cout << "🎬 Auto-starting H264 video streaming via WebRTC..." << std::endl;
+                        std::cout << "🎬 Starting H264 video streaming via WebRTC..." << std::endl;
                         std::cout << "📹 Video file: " << video_file << std::endl;
                         this->startH264FileStreaming(peer_id, video_file);
                     } else {
-                        std::cout << "⚠️ No video file found in bag_processor directory" << std::endl;
-                        
-                        // Try a simple test pattern as fallback
-                        std::cout << "📺 Starting test pattern streaming instead..." << std::endl;
+                        std::cout << "⚠️ No video file found - starting test pattern..." << std::endl;
                         this->startTestPatternStreaming(peer_id);
                     }
                 }).detach();
@@ -219,13 +206,22 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
                 std::cout << "❌ Video track closed for " << peer_id << std::endl;
             });
             
-            std::cout << "✅ Video track with H264 codec added successfully" << std::endl;
+            std::cout << "✅ Video track added successfully (step 3 complete)" << std::endl;
             
         } catch (const std::exception& e) {
-            std::cerr << "⚠️  Failed to add video track: " << e.what() << std::endl;
+            std::cerr << "❌ Failed to add video track (step 3): " << e.what() << std::endl;
+            return false;
         }
         
-        // The answer will be automatically generated and published via onLocalDescription callback
+        // Step 4: Set remote description using received offer
+        std::cout << "📥 Setting remote description (step 4)" << std::endl;
+        rtc::Description offer(offer_sdp, rtc::Description::Type::Offer);
+        pc->setRemoteDescription(offer);
+        std::cout << "✅ Remote description set (step 4 complete)" << std::endl;
+        
+        // Step 5 & 6: Create answer, setLocalDescription, and publish will happen automatically 
+        // via the onLocalDescription callback set up in createPeerConnection()
+        std::cout << "✅ WebRTC handshake initiated - answer will be generated and published automatically" << std::endl;
         
         return true;
         
