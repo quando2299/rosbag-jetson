@@ -144,43 +144,51 @@ void WebRTCManager::setupICEHandling(const std::string& peer_id, std::shared_ptr
     });
     
     pc->onLocalDescription([this, peer_id](rtc::Description description) {
-        std::cout << "🎉 CALLBACK TRIGGERED: Step 5: Local description (answer) ready for " << peer_id << std::endl;
+        std::cout << "🎉 CALLBACK TRIGGERED: Step 6 - Create Answer and setLocalDescription" << std::endl;
+        std::cout << "📝 Step 6a: Answer created automatically by libdatachannel for " << peer_id << std::endl;
+        std::cout << "📝 Step 6b: setLocalDescription(answer) completed automatically" << std::endl;
         
-        // Debug: Print SDP to check video track configuration
+        // Get the generated SDP answer
         std::string sdp_answer = description;
         std::cout << "🔍 DEBUG: Generated SDP Answer:" << std::endl;
         std::cout << "--- SDP START ---" << std::endl;
         std::cout << sdp_answer << std::endl;
         std::cout << "--- SDP END ---" << std::endl;
         
-        // Step 6: Publish answer to MQTT
+        // Step 6c: Publish answer to /answer topic
         std::string answer_topic = thing_name_ + "/robot-control/" + peer_id + "/answer";
+        std::cout << "📡 Step 6c: Publishing answer to /answer topic: " << answer_topic << std::endl;
         
         if (publish_callback_) {
             publish_callback_(answer_topic, sdp_answer);
-            std::cout << "✅ Step 5 & 6 Complete: Answer created and published to " << answer_topic << std::endl;
+            std::cout << "✅ Step 6 COMPLETE: Answer created, setLocalDescription called, and published to /answer topic" << std::endl;
             std::cout << "📄 Answer SDP length: " << sdp_answer.length() << " characters" << std::endl;
+            std::cout << "🎯 All 6 steps completed successfully for peer " << peer_id << std::endl;
         } else {
-            std::cerr << "❌ Step 6 Failed: No publish callback available" << std::endl;
+            std::cerr << "❌ Step 6c Failed: No publish callback available" << std::endl;
         }
     });
 }
 
 bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& offer_sdp) {
     try {
-        std::cout << "🚀 Creating WebRTC peer connection for: " << peer_id << std::endl;
+        std::cout << "🚀 Step 1: peerId extracted: " << peer_id << std::endl;
         
-        // Create new peer connection
+        // Step 2: Create PeerConnection and store with key <peerId>
+        std::cout << "🔗 Step 2: Creating PeerConnection for " << peer_id << std::endl;
         auto pc = createPeerConnection(peer_id);
-        
-        // Store the peer connection
         peer_connections_[peer_id] = pc;
+        std::cout << "✅ Step 2 complete: PeerConnection created and stored" << std::endl;
         
-        // Step 3: ADD VIDEO STREAM to PeerConnection FIRST (before setting remote description)
+        // Step 3: Register onIceCandidate handler to store ICE candidates for <peerId>
+        std::cout << "🧊 Step 3: Registering ICE candidate handler" << std::endl;
+        // Note: ICE handling is already set up in createPeerConnection -> setupICEHandling
+        std::cout << "✅ Step 3 complete: ICE candidate handler registered" << std::endl;
+        
+        // Step 4: Add video stream to PeerConnection
+        std::cout << "🎬 Step 4: Adding video stream to PeerConnection" << std::endl;
         try {
-            std::cout << "🎬 Adding video track to peer connection (step 3)" << std::endl;
-            
-            // Create video media description with H264 codec (basic working version)
+            // Create video media description with H264 codec
             rtc::Description::Video video("video", rtc::Description::Direction::SendOnly);
             video.addH264Codec(96, "packetization-mode=1;level-asymmetry-allowed=1"); 
             video.setBitrate(1000); // 1 Mbps
@@ -195,8 +203,6 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
                 // Start video streaming when track opens
                 std::thread([this, peer_id]() {
                     std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                    
-                    // Start live video frame streaming (like robot_simulator camera feed)
                     std::cout << "🎬 Starting live video frame streaming via WebRTC..." << std::endl;
                     this->startLiveVideoStreaming(peer_id);
                 }).detach();
@@ -206,41 +212,34 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
                 std::cout << "❌ Video track closed for " << peer_id << std::endl;
             });
             
-            std::cout << "✅ Video track added successfully (step 3 complete)" << std::endl;
+            std::cout << "✅ Step 4 complete: Video stream added to PeerConnection" << std::endl;
             
         } catch (const std::exception& e) {
-            std::cerr << "❌ Failed to add video track (step 3): " << e.what() << std::endl;
+            std::cerr << "❌ Step 4 failed: " << e.what() << std::endl;
             return false;
         }
         
-        // Step 4: Set remote description using received offer
-        std::cout << "📥 Setting remote description (step 4)" << std::endl;
+        // Step 5: Set remote description using received offer
+        std::cout << "📥 Step 5: Setting remote description using received offer" << std::endl;
         std::cout << "🔍 DEBUG: Received offer SDP length: " << offer_sdp.length() << " chars" << std::endl;
         
         try {
             rtc::Description offer(offer_sdp, rtc::Description::Type::Offer);
             pc->setRemoteDescription(offer);
-            std::cout << "✅ Remote description set (step 4 complete)" << std::endl;
+            std::cout << "✅ Step 5 complete: Remote description set using received offer" << std::endl;
         } catch (const std::exception& e) {
-            std::cerr << "❌ Error setting remote description: " << e.what() << std::endl;
+            std::cerr << "❌ Step 5 failed: " << e.what() << std::endl;
             return false;
         }
         
-        // Step 5: Explicitly call setLocalDescription() to generate answer
-        // Note: Some versions of libdatachannel do this automatically, but let's be explicit
-        std::cout << "📝 Step 5: Generating answer via setLocalDescription()" << std::endl;
-        try {
-            pc->setLocalDescription();
-            std::cout << "✅ setLocalDescription() called successfully" << std::endl;
-        } catch (const std::exception& e) {
-            // If it fails, it might be because libdatachannel already called it automatically
-            std::cout << "⚠️ Note: " << e.what() << " (might be auto-generated)" << std::endl;
-        }
+        // Step 6: Create Answer and setLocalDescription(answer) - handled in onLocalDescription callback
+        std::cout << "⏳ Step 6: Answer creation will happen in onLocalDescription callback" << std::endl;
+        std::cout << "✅ All 6 steps initiated successfully for peer " << peer_id << std::endl;
         
         return true;
         
     } catch (const std::exception& e) {
-        std::cerr << "❌ Error handling offer for " << peer_id << ": " << e.what() << std::endl;
+        std::cerr << "❌ Error in 6-step offer handling for " << peer_id << ": " << e.what() << std::endl;
         return false;
     }
 }
