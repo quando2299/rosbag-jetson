@@ -35,25 +35,14 @@ WebRTCManager::~WebRTCManager() {
 rtc::Configuration WebRTCManager::getRTCConfig() {
     rtc::Configuration config;
     
-    // Add multiple STUN servers for better connectivity
-    config.iceServers.emplace_back("stun:stun.l.google.com:19302");
+    // Use original working STUN configuration
+    config.iceServers.emplace_back("stun:stun..google.com:19302");
     config.iceServers.emplace_back("stun:stun1.l.google.com:19302");
-    config.iceServers.emplace_back("stun:stun2.l.google.com:19302");
-    config.iceServers.emplace_back("stun:stun3.l.google.com:19302");
-    config.iceServers.emplace_back("stun:stun4.l.google.com:19302");
+    config.iceServers.emplace_back("stun:stun1.2.google.com:19302");
+    config.iceServers.emplace_back("stun:stun1.3.google.com:19302");
+    config.iceServers.emplace_back("stun:stun1.4.google.com:19302");
     
-    // Add public TURN server for NAT traversal (important for restricted networks)
-    // Note: In production, use your own TURN server with authentication
-    rtc::IceServer turn1("turn:openrelay.metered.ca", 80, "openrelayproject", "openrelayproject", rtc::IceServer::RelayType::TurnUdp);
-    config.iceServers.push_back(turn1);
-    
-    rtc::IceServer turn2("turn:openrelay.metered.ca", 443, "openrelayproject", "openrelayproject", rtc::IceServer::RelayType::TurnTcp);
-    config.iceServers.push_back(turn2);
-    
-    // Set ICE transport policy for better connectivity
-    config.enableIceTcp = true;  // Enable ICE-TCP for firewall traversal
-    
-    std::cout << "🌐 WebRTC config: " << config.iceServers.size() << " ICE servers configured" << std::endl;
+    std::cout << "🌐 WebRTC config: Using original STUN configuration" << std::endl;
     
     return config;
 }
@@ -213,14 +202,10 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
         // Step 4: Add video stream to PeerConnection
         std::cout << "🎬 Step 4: Adding video stream to PeerConnection" << std::endl;
         try {
-            // Create video media description with H264 codec
+            // Create video media description with H264 codec (original working configuration)
             rtc::Description::Video video("video", rtc::Description::Direction::SendOnly);
-            
-            // Add H264 codec with more compatible parameters
-            video.addH264Codec(96, "profile-level-id=42e01f;packetization-mode=1;level-asymmetry-allowed=1");
+            video.addH264Codec(96, "packetization-mode=1;level-asymmetry-allowed=1"); 
             video.setBitrate(1000); // 1 Mbps
-            
-            std::cout << "🎬 Video track config: H264 codec (PT=96), 1Mbps bitrate, SendOnly direction" << std::endl;
             
             auto video_track = pc->addTrack(video);
             video_tracks_[peer_id] = video_track;
@@ -252,20 +237,12 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
         std::cout << "📥 Step 5: Setting remote description using received offer" << std::endl;
         std::cout << "🔍 DEBUG: Received offer SDP length: " << offer_sdp.length() << " chars" << std::endl;
         
-        // Log received offer SDP for debugging
-        std::cout << "🔍 DEBUG: Offer SDP preview (first 200 chars):" << std::endl;
-        std::cout << offer_sdp.substr(0, 200) << "..." << std::endl;
-        
         try {
             rtc::Description offer(offer_sdp, rtc::Description::Type::Offer);
             pc->setRemoteDescription(offer);
             std::cout << "✅ Step 5 complete: Remote description set using received offer" << std::endl;
-            
-            // Log timing - answer should be generated within a few seconds
-            std::cout << "⏳ Waiting for answer generation (timeout in ~10 seconds)..." << std::endl;
         } catch (const std::exception& e) {
             std::cerr << "❌ Step 5 failed: " << e.what() << std::endl;
-            std::cerr << "🔍 Check if offer SDP format is compatible with libdatachannel" << std::endl;
             return false;
         }
         
