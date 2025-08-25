@@ -59,7 +59,7 @@ std::shared_ptr<rtc::PeerConnection> WebRTCManager::createPeerConnection(const s
             case rtc::PeerConnection::State::Connected:
                 std::cout << "Connected" << std::endl;
                 std::cout << "✅ WebRTC connection established for " << peer_id << std::endl;
-                std::cout << "🎯 Ready for video streaming via WebSocket" << std::endl;
+                std::cout << "🎯 Ready for video streaming via WebRTC data channel" << std::endl;
                 break;
             case rtc::PeerConnection::State::Disconnected:
                 std::cout << "Disconnected" << std::endl;
@@ -773,7 +773,39 @@ std::vector<std::vector<uint8_t>> WebRTCManager::extractNALUnits(const std::vect
                     // Only accept common H.264 NAL unit types (more restrictive filtering)
                     if (nal_type >= 1 && nal_type <= 9) {
                         
-                        // Don't apply emulation prevention - it's already handled in MP4
+                        // Skip problematic SEI units that contain emulation prevention issues
+                        if (nal_type == 6) {
+                            // Check if SEI contains problematic sequences that would confuse the decoder
+                            bool has_problematic_sequence = false;
+                            
+                            // Check for start code patterns (0x00 0x00 0x01) within payload
+                            for (size_t i = 0; i < nal_unit.size() - 2; i++) {
+                                if (nal_unit[i] == 0x00 && nal_unit[i+1] == 0x00 && nal_unit[i+2] == 0x01) {
+                                    has_problematic_sequence = true;
+                                    std::cout << "⚠️ Found start code emulation in SEI at position " << i << std::endl;
+                                    break;
+                                }
+                            }
+                            
+                            // Also check for 4-byte start code patterns (0x00 0x00 0x00 0x01)
+                            if (!has_problematic_sequence) {
+                                for (size_t i = 0; i < nal_unit.size() - 3; i++) {
+                                    if (nal_unit[i] == 0x00 && nal_unit[i+1] == 0x00 && 
+                                        nal_unit[i+2] == 0x00 && nal_unit[i+3] == 0x01) {
+                                        has_problematic_sequence = true;
+                                        std::cout << "⚠️ Found 4-byte start code emulation in SEI at position " << i << std::endl;
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            if (has_problematic_sequence) {
+                                std::cout << "⚠️ Skipping SEI with start code emulation issue (size: " << nal_unit.size() << " bytes)" << std::endl;
+                                std::cout << "   This SEI likely contains timestamp data causing decoder confusion" << std::endl;
+                                continue;
+                            }
+                        }
+                        
                         nal_units.push_back(nal_unit);
                         
                         const char* type_name = "Unknown";
@@ -830,7 +862,39 @@ std::vector<std::vector<uint8_t>> WebRTCManager::extractNALUnits(const std::vect
                     // Only accept common H.264 NAL unit types (more restrictive filtering)
                     if (nal_type >= 1 && nal_type <= 9) {
                         
-                        // Don't apply emulation prevention - it's already handled in MP4
+                        // Skip problematic SEI units that contain emulation prevention issues
+                        if (nal_type == 6) {
+                            // Check if SEI contains problematic sequences that would confuse the decoder
+                            bool has_problematic_sequence = false;
+                            
+                            // Check for start code patterns (0x00 0x00 0x01) within payload
+                            for (size_t i = 0; i < nal_unit.size() - 2; i++) {
+                                if (nal_unit[i] == 0x00 && nal_unit[i+1] == 0x00 && nal_unit[i+2] == 0x01) {
+                                    has_problematic_sequence = true;
+                                    std::cout << "⚠️ Found start code emulation in SEI at position " << i << std::endl;
+                                    break;
+                                }
+                            }
+                            
+                            // Also check for 4-byte start code patterns (0x00 0x00 0x00 0x01)
+                            if (!has_problematic_sequence) {
+                                for (size_t i = 0; i < nal_unit.size() - 3; i++) {
+                                    if (nal_unit[i] == 0x00 && nal_unit[i+1] == 0x00 && 
+                                        nal_unit[i+2] == 0x00 && nal_unit[i+3] == 0x01) {
+                                        has_problematic_sequence = true;
+                                        std::cout << "⚠️ Found 4-byte start code emulation in SEI at position " << i << std::endl;
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            if (has_problematic_sequence) {
+                                std::cout << "⚠️ Skipping SEI with start code emulation issue (size: " << nal_unit.size() << " bytes)" << std::endl;
+                                std::cout << "   This SEI likely contains timestamp data causing decoder confusion" << std::endl;
+                                continue;
+                            }
+                        }
+                        
                         nal_units.push_back(nal_unit);
                         
                         const char* type_name = "Unknown";
