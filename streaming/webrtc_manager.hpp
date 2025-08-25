@@ -49,6 +49,9 @@ public:
     // Helper function to find video file
     std::string findVideoFile();
     
+    // Test pattern streaming for debugging
+    void startTestPatternStreaming(const std::string& peer_id);
+    
 private:
     std::string thing_name_;
     PublishCallback publish_callback_;

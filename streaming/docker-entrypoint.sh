@@ -15,6 +15,23 @@ if [ ! -f "./mqtt_client" ]; then
 fi
 
 echo "✅ Executable found: ./mqtt_client"
+
+# Check for video files
+echo ""
+echo "🔍 Checking for video files in container..."
+echo "Contents of /workspace:"
+ls -la /workspace/ || echo "Directory not found"
+echo ""
+echo "Contents of /workspace/bag_processor:"
+ls -la /workspace/bag_processor/ || echo "Directory not found"
+echo ""
+echo "Looking for extracted_images directories:"
+find /workspace -name "extracted_images_*" -type d 2>/dev/null || echo "No extracted_images directories found"
+echo ""
+echo "Looking for MP4 files:"
+find /workspace -name "*.mp4" -type f 2>/dev/null || echo "No MP4 files found"
+echo ""
+
 echo ""
 echo "🚀 Starting MQTT client..."
 echo "This will:"

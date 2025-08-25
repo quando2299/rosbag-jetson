@@ -192,16 +192,25 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
             video_track->onOpen([this, peer_id]() {
                 std::cout << "✅ Video track opened for " << peer_id << std::endl;
                 
-                // Auto-start H264 video streaming when track opens
-                // Look for video files in bag_processor directory
-                std::string video_file = this->findVideoFile();
-                if (!video_file.empty()) {
-                    std::cout << "🎬 Auto-starting H264 video streaming via WebRTC..." << std::endl;
-                    std::cout << "📹 Video file: " << video_file << std::endl;
-                    this->startH264FileStreaming(peer_id, video_file);
-                } else {
-                    std::cout << "⚠️ No video file found in bag_processor directory" << std::endl;
-                }
+                // Start video streaming in a separate thread to avoid blocking
+                std::thread([this, peer_id]() {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500)); // Small delay to ensure track is ready
+                    
+                    // Auto-start H264 video streaming when track opens
+                    // Look for video files in bag_processor directory
+                    std::string video_file = this->findVideoFile();
+                    if (!video_file.empty()) {
+                        std::cout << "🎬 Auto-starting H264 video streaming via WebRTC..." << std::endl;
+                        std::cout << "📹 Video file: " << video_file << std::endl;
+                        this->startH264FileStreaming(peer_id, video_file);
+                    } else {
+                        std::cout << "⚠️ No video file found in bag_processor directory" << std::endl;
+                        
+                        // Try a simple test pattern as fallback
+                        std::cout << "📺 Starting test pattern streaming instead..." << std::endl;
+                        this->startTestPatternStreaming(peer_id);
+                    }
+                }).detach();
             });
             
             video_track->onClosed([peer_id]() {
@@ -695,6 +704,64 @@ std::string WebRTCManager::findVideoFile() {
     }
     
     return "";
+}
+
+void WebRTCManager::startTestPatternStreaming(const std::string& peer_id) {
+    try {
+        auto track_it = video_tracks_.find(peer_id);
+        if (track_it == video_tracks_.end()) {
+            std::cout << "⚠️  No video track found for " << peer_id << std::endl;
+            return;
+        }
+        
+        auto track = track_it->second;
+        if (!track || !track->isOpen()) {
+            std::cout << "⚠️  Track is not ready for " << peer_id << std::endl;
+            return;
+        }
+        
+        std::cout << "🎨 Starting test pattern streaming for " << peer_id << std::endl;
+        
+        // Create a simple test pattern (color bars)
+        streaming_active_[peer_id] = true;
+        streaming_threads_[peer_id] = std::thread([this, peer_id, track]() {
+            try {
+                auto& active = streaming_active_[peer_id];
+                int frame_count = 0;
+                const auto frame_duration = std::chrono::milliseconds(33); // 30 FPS
+                
+                while (active && frame_count < 300) { // Stream for 10 seconds
+                    // Create a simple test pattern
+                    rtc::binary packet;
+                    
+                    // Send a small test packet (simulate video data)
+                    std::string test_data = "TEST_FRAME_" + std::to_string(frame_count);
+                    for (char c : test_data) {
+                        packet.push_back(static_cast<std::byte>(c));
+                    }
+                    
+                    if (track->send(packet)) {
+                        if (frame_count % 30 == 0) {
+                            std::cout << "📺 Sent test frame " << frame_count << " via WebRTC" << std::endl;
+                        }
+                    } else {
+                        std::cout << "⚠️  Failed to send test frame" << std::endl;
+                    }
+                    
+                    frame_count++;
+                    std::this_thread::sleep_for(frame_duration);
+                }
+                
+                std::cout << "✅ Test pattern streaming completed (" << frame_count << " frames sent)" << std::endl;
+                
+            } catch (const std::exception& e) {
+                std::cerr << "❌ Error in test pattern streaming: " << e.what() << std::endl;
+            }
+        });
+        
+    } catch (const std::exception& e) {
+        std::cerr << "❌ Error starting test pattern: " << e.what() << std::endl;
+    }
 }
 
 bool WebRTCManager::isWebRTCEnabled() const {
