@@ -180,20 +180,10 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
         try {
             std::cout << "🎬 Adding video track to peer connection (step 3)" << std::endl;
             
-            // Create video media description with H264 codec - match working robot_simulator  
+            // Create video media description with H264 codec (basic working version)
             rtc::Description::Video video("video", rtc::Description::Direction::SendOnly);
             video.addH264Codec(96, "packetization-mode=1;level-asymmetry-allowed=1"); 
             video.setBitrate(1000); // 1 Mbps
-            
-            // Add SSRC with proper media stream ID for Flutter onTrack recognition
-            try {
-                video.addSSRC(12345678, "robot-video-stream");
-                video.addAttribute("msid:robot-video-stream video-track-001");
-                std::cout << "✅ Added SSRC and media stream attributes" << std::endl;
-            } catch (const std::exception& e) {
-                std::cout << "⚠️ Could not add SSRC attributes: " << e.what() << std::endl;
-                // Continue anyway - try without SSRC
-            }
             
             auto video_track = pc->addTrack(video);
             video_tracks_[peer_id] = video_track;
@@ -236,9 +226,10 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
             return false;
         }
         
-        // Step 5 & 6: Create answer, setLocalDescription, and publish will happen automatically 
-        // via the onLocalDescription callback set up in createPeerConnection()
-        std::cout << "✅ WebRTC handshake initiated - answer will be generated and published automatically" << std::endl;
+        // Step 5: Generate local SDP (THIS WAS MISSING!)
+        std::cout << "📝 Step 5: Calling setLocalDescription() to generate answer" << std::endl;
+        pc->setLocalDescription(); // This triggers onLocalDescription callback
+        std::cout << "✅ setLocalDescription() called - answer will be generated automatically" << std::endl;
         
         return true;
         
@@ -879,54 +870,13 @@ void WebRTCManager::sendH264FrameRTP(std::shared_ptr<rtc::Track> track, const st
     }
     
     try {
-        // Create RTP packet with H.264 payload
-        const size_t RTP_HEADER_SIZE = 12;
-        const size_t MAX_PAYLOAD_SIZE = 1200;
+        // Send raw H264 frame data directly - libdatachannel handles RTP packetization
+        // This is the correct way according to your example
+        track->send(reinterpret_cast<const rtc::byte*>(h264_frame.data()), h264_frame.size());
         
-        if (h264_frame.size() <= MAX_PAYLOAD_SIZE) {
-            rtc::binary packet;
-            packet.reserve(RTP_HEADER_SIZE + h264_frame.size());
-            
-            // RTP header
-            packet.push_back(static_cast<std::byte>(0x80)); // V=2, P=0, X=0, CC=0
-            packet.push_back(static_cast<std::byte>(0x60)); // M=0 (will set to 1 for last packet), PT=96 (H.264)
-            
-            // Set marker bit for keyframes (end of frame)
-            if (frame_number % 30 == 0) { // Keyframes
-                packet[1] = static_cast<std::byte>(0xE0); // M=1, PT=96
-            }
-            
-            // Sequence number (16 bits)
-            static uint16_t seq_num = 1000;
-            seq_num++;
-            packet.push_back(static_cast<std::byte>(seq_num >> 8));
-            packet.push_back(static_cast<std::byte>(seq_num & 0xFF));
-            
-            // Timestamp (32 bits) - 90kHz clock
-            uint32_t timestamp = frame_number * 3000; // 30fps = 3000 ticks per frame at 90kHz
-            packet.push_back(static_cast<std::byte>(timestamp >> 24));
-            packet.push_back(static_cast<std::byte>((timestamp >> 16) & 0xFF));
-            packet.push_back(static_cast<std::byte>((timestamp >> 8) & 0xFF));
-            packet.push_back(static_cast<std::byte>(timestamp & 0xFF));
-            
-            // SSRC (32 bits) - fixed value
-            packet.push_back(static_cast<std::byte>(0x12));
-            packet.push_back(static_cast<std::byte>(0x34));
-            packet.push_back(static_cast<std::byte>(0x56));
-            packet.push_back(static_cast<std::byte>(0x78));
-            
-            // Add H.264 payload
-            for (uint8_t byte : h264_frame) {
-                packet.push_back(static_cast<std::byte>(byte));
-            }
-            
-            if (track->send(packet)) {
-                // Success - frame sent
-            } else {
-                std::cout << "⚠️  Failed to send H264 frame " << frame_number << std::endl;
-            }
-        } else {
-            std::cout << "⚠️  H264 frame too large: " << h264_frame.size() << " bytes" << std::endl;
+        // Log success occasionally
+        if (frame_number % 30 == 0) { // Log every second
+            std::cout << "📤 Sent H264 frame " << frame_number << " (" << h264_frame.size() << " bytes)" << std::endl;
         }
         
     } catch (const std::exception& e) {
