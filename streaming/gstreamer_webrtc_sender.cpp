@@ -148,19 +148,19 @@ public:
                 handleOffer(peer_id, payload);
             }
         }
-        // Check if this is ICE candidate from robot
+        // Check if this is ICE candidate from robot (Flutter app)
         else if (topic.find("/candidate/robot") != std::string::npos) {
             std::string peer_id = extractPeerId(topic);
-            if (!peer_id.empty()) {
-                std::cout << "Received ICE candidates for peer: " << peer_id << std::endl;
+            if (!peer_id.empty() && peer_id == current_peer_id) {
+                std::cout << "Received remote ICE candidates from Flutter for peer: " << peer_id << std::endl;
                 
                 try {
                     json candidates = json::parse(payload);
                     if (candidates.is_array()) {
-                        handleIceCandidates(peer_id, candidates);
+                        handleRemoteIceCandidates(peer_id, candidates);
                     }
                 } catch (const std::exception& e) {
-                    std::cerr << "Error parsing ICE candidates: " << e.what() << std::endl;
+                    std::cerr << "Error parsing remote ICE candidates: " << e.what() << std::endl;
                 }
             }
         }
@@ -445,14 +445,19 @@ public:
         std::cout << "ICE candidate collected: " << candidate << std::endl;
     }
     
-    void handleIceCandidates(const std::string& peer_id, const json& candidates) {
+    void handleRemoteIceCandidates(const std::string& peer_id, const json& candidates) {
         if (!candidates.is_array()) {
-            std::cerr << "ICE candidates not an array" << std::endl;
+            std::cerr << "Remote ICE candidates not an array" << std::endl;
             return;
         }
         
         std::lock_guard<std::mutex> lock(webrtc_mutex);
-        if (!webrtcbin) return;
+        if (!webrtcbin) {
+            std::cout << "No webrtcbin available for remote ICE candidates" << std::endl;
+            return;
+        }
+        
+        std::cout << "Processing " << candidates.size() << " remote ICE candidates from Flutter" << std::endl;
         
         for (const auto& candidate : candidates) {
             if (candidate.contains("candidate") && candidate.contains("sdpMLineIndex")) {
@@ -460,7 +465,7 @@ public:
                 guint mlineindex = candidate["sdpMLineIndex"];
                 
                 g_signal_emit_by_name(webrtcbin, "add-ice-candidate", mlineindex, cand_str.c_str());
-                std::cout << "Added remote ICE candidate" << std::endl;
+                std::cout << "✅ Added remote ICE candidate from Flutter" << std::endl;
             }
         }
     }
