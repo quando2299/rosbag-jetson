@@ -763,15 +763,37 @@ std::vector<std::vector<uint8_t>> WebRTCManager::extractNALUnits(const std::vect
             }
             
             // Extract NAL unit
-            if (end > start) {
+            if (end > start && start < mp4_data.size()) {
                 std::vector<uint8_t> nal_unit(mp4_data.begin() + start, mp4_data.begin() + end);
                 
-                // Apply emulation prevention if needed
-                auto processed_nal = applyEmulationPrevention(nal_unit);
-                nal_units.push_back(processed_nal);
-                
-                std::cout << "🔍 Found NAL unit (type: " << (processed_nal[0] & 0x1F) 
-                         << ", size: " << processed_nal.size() << " bytes)" << std::endl;
+                // Only process valid H.264 NAL units (types 1-12, 14-18, 24-31)
+                if (!nal_unit.empty()) {
+                    uint8_t nal_type = nal_unit[0] & 0x1F;
+                    
+                    // Filter out invalid/unknown NAL unit types
+                    if ((nal_type >= 1 && nal_type <= 12) || 
+                        (nal_type >= 14 && nal_type <= 18) ||
+                        (nal_type >= 24 && nal_type <= 31)) {
+                        
+                        // Don't apply emulation prevention - it's already handled in MP4
+                        nal_units.push_back(nal_unit);
+                        
+                        const char* type_name = "Unknown";
+                        switch (nal_type) {
+                            case 1: type_name = "Non-IDR"; break;
+                            case 5: type_name = "IDR"; break;
+                            case 6: type_name = "SEI"; break;
+                            case 7: type_name = "SPS"; break;
+                            case 8: type_name = "PPS"; break;
+                            case 9: type_name = "AU Delimiter"; break;
+                        }
+                        
+                        std::cout << "🔍 Found valid NAL unit (type: " << (int)nal_type 
+                                 << "-" << type_name << ", size: " << nal_unit.size() << " bytes)" << std::endl;
+                    } else {
+                        std::cout << "⚠️ Skipping invalid NAL unit type: " << (int)nal_type << std::endl;
+                    }
+                }
             }
             
             i = end;
@@ -800,15 +822,37 @@ std::vector<std::vector<uint8_t>> WebRTCManager::extractNALUnits(const std::vect
             }
             
             // Extract NAL unit
-            if (end > start) {
+            if (end > start && start < mp4_data.size()) {
                 std::vector<uint8_t> nal_unit(mp4_data.begin() + start, mp4_data.begin() + end);
                 
-                // Apply emulation prevention if needed
-                auto processed_nal = applyEmulationPrevention(nal_unit);
-                nal_units.push_back(processed_nal);
-                
-                std::cout << "🔍 Found NAL unit (type: " << (processed_nal[0] & 0x1F) 
-                         << ", size: " << processed_nal.size() << " bytes)" << std::endl;
+                // Only process valid H.264 NAL units
+                if (!nal_unit.empty()) {
+                    uint8_t nal_type = nal_unit[0] & 0x1F;
+                    
+                    // Filter out invalid/unknown NAL unit types
+                    if ((nal_type >= 1 && nal_type <= 12) || 
+                        (nal_type >= 14 && nal_type <= 18) ||
+                        (nal_type >= 24 && nal_type <= 31)) {
+                        
+                        // Don't apply emulation prevention - it's already handled in MP4
+                        nal_units.push_back(nal_unit);
+                        
+                        const char* type_name = "Unknown";
+                        switch (nal_type) {
+                            case 1: type_name = "Non-IDR"; break;
+                            case 5: type_name = "IDR"; break;
+                            case 6: type_name = "SEI"; break;
+                            case 7: type_name = "SPS"; break;
+                            case 8: type_name = "PPS"; break;
+                            case 9: type_name = "AU Delimiter"; break;
+                        }
+                        
+                        std::cout << "🔍 Found valid NAL unit (type: " << (int)nal_type 
+                                 << "-" << type_name << ", size: " << nal_unit.size() << " bytes)" << std::endl;
+                    } else {
+                        std::cout << "⚠️ Skipping invalid NAL unit type: " << (int)nal_type << std::endl;
+                    }
+                }
             }
             
             i = end;
@@ -853,46 +897,89 @@ void WebRTCManager::sendNALUnit(std::shared_ptr<rtc::Track> track, const std::ve
     }
     
     try {
-        // Create packet with NAL unit start code + data
-        rtc::binary packet;
+        // Fragment large NAL units to avoid MTU issues
+        const size_t MAX_PACKET_SIZE = 1200; // Safe MTU size
+        const size_t START_CODE_SIZE = 4;
         
-        // For WebRTC H.264, we need proper NAL unit format
-        // Add 4-byte start code (0x00000001) followed by NAL unit data
-        packet.reserve(nal_unit.size() + 4);
-        
-        // Add NAL unit start code
-        packet.push_back(static_cast<std::byte>(0x00));
-        packet.push_back(static_cast<std::byte>(0x00));
-        packet.push_back(static_cast<std::byte>(0x00));
-        packet.push_back(static_cast<std::byte>(0x01));
-        
-        // Add NAL unit payload
-        for (uint8_t byte : nal_unit) {
-            packet.push_back(static_cast<std::byte>(byte));
+        uint8_t nal_type = nal_unit[0] & 0x1F;
+        const char* nal_type_name = "Unknown";
+        switch (nal_type) {
+            case 1: nal_type_name = "Non-IDR"; break;
+            case 5: nal_type_name = "IDR"; break;
+            case 6: nal_type_name = "SEI"; break;
+            case 7: nal_type_name = "SPS"; break;
+            case 8: nal_type_name = "PPS"; break;
+            case 9: nal_type_name = "AU Delimiter"; break;
         }
         
-        // Send the formatted NAL unit
-        if (track->send(packet)) {
-            // Identify NAL unit type for logging
-            uint8_t nal_type = nal_unit[0] & 0x1F;
-            const char* nal_type_name = "Unknown";
-            switch (nal_type) {
-                case 1: nal_type_name = "Non-IDR"; break;
-                case 5: nal_type_name = "IDR"; break;
-                case 6: nal_type_name = "SEI"; break;
-                case 7: nal_type_name = "SPS"; break;
-                case 8: nal_type_name = "PPS"; break;
-                case 9: nal_type_name = "AU Delimiter"; break;
+        // If NAL unit + start code fits in one packet, send as single packet
+        if (nal_unit.size() + START_CODE_SIZE <= MAX_PACKET_SIZE) {
+            rtc::binary packet;
+            packet.reserve(nal_unit.size() + START_CODE_SIZE);
+            
+            // Add NAL unit start code
+            packet.push_back(static_cast<std::byte>(0x00));
+            packet.push_back(static_cast<std::byte>(0x00));
+            packet.push_back(static_cast<std::byte>(0x00));
+            packet.push_back(static_cast<std::byte>(0x01));
+            
+            // Add NAL unit payload
+            for (uint8_t byte : nal_unit) {
+                packet.push_back(static_cast<std::byte>(byte));
             }
             
-            static int sent_count = 0;
-            if (sent_count % 30 == 0) {  // Log every 30th NAL unit to reduce noise
-                std::cout << "📤 Sent NAL unit (type " << (int)nal_type << "-" << nal_type_name 
-                         << ", size: " << packet.size() << " bytes)" << std::endl;
+            if (track->send(packet)) {
+                static int sent_count = 0;
+                if (sent_count % 10 == 0) {
+                    std::cout << "📤 Sent NAL unit (type " << (int)nal_type << "-" << nal_type_name 
+                             << ", size: " << packet.size() << " bytes)" << std::endl;
+                }
+                sent_count++;
+            } else {
+                std::cout << "⚠️ Failed to send NAL unit (type " << (int)nal_type << ")" << std::endl;
             }
-            sent_count++;
         } else {
-            std::cout << "⚠️ Failed to send NAL unit via track" << std::endl;
+            // Fragment large NAL unit into multiple packets
+            std::cout << "📦 Fragmenting large NAL unit (type " << (int)nal_type << "-" << nal_type_name 
+                     << ", " << nal_unit.size() << " bytes) into smaller packets" << std::endl;
+            
+            size_t offset = 0;
+            int fragment_count = 0;
+            bool success = true;
+            
+            while (offset < nal_unit.size() && success) {
+                rtc::binary packet;
+                size_t fragment_size = std::min(MAX_PACKET_SIZE - START_CODE_SIZE, nal_unit.size() - offset);
+                packet.reserve(fragment_size + START_CODE_SIZE);
+                
+                // Add start code for each fragment
+                packet.push_back(static_cast<std::byte>(0x00));
+                packet.push_back(static_cast<std::byte>(0x00));
+                packet.push_back(static_cast<std::byte>(0x00));
+                packet.push_back(static_cast<std::byte>(0x01));
+                
+                // Add fragment data
+                for (size_t i = 0; i < fragment_size; i++) {
+                    packet.push_back(static_cast<std::byte>(nal_unit[offset + i]));
+                }
+                
+                if (track->send(packet)) {
+                    std::cout << "📤 Sent fragment " << fragment_count << " (size: " << packet.size() << " bytes)" << std::endl;
+                } else {
+                    std::cout << "⚠️ Failed to send fragment " << fragment_count << std::endl;
+                    success = false;
+                }
+                
+                offset += fragment_size;
+                fragment_count++;
+                
+                // Small delay between fragments to avoid overwhelming
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            
+            if (success) {
+                std::cout << "✅ Successfully sent " << fragment_count << " fragments for NAL unit type " << (int)nal_type << std::endl;
+            }
         }
         
     } catch (const std::exception& e) {
