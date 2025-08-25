@@ -1,3 +1,4 @@
+#define GST_USE_UNSTABLE_API
 #include <gst/gst.h>
 #include <gst/webrtc/webrtc.h>
 #include <gst/sdp/sdp.h>
@@ -8,6 +9,8 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <chrono>
+#include <signal.h>
 
 using json = nlohmann::json;
 
@@ -53,7 +56,8 @@ public:
         const char* video = getenv("VIDEO_FILE");
         const char* stun = getenv("STUN_SERVER");
         
-        mqtt_broker = broker ? broker : "localhost";
+        // Use the same default broker as your existing code
+        mqtt_broker = broker ? broker : "test.rmcs.d6-vnext.com";
         mqtt_port = port ? std::stoi(port) : 1883;
         video_file = video ? video : "/app/videos/flir_id8_image_resized_30fps.mp4";
         stun_server = stun ? stun : "stun://stun.l.google.com:19302";
@@ -191,59 +195,165 @@ public:
     void startPipeline(const std::string& peer_id, const std::string& sdp_offer) {
         std::lock_guard<std::mutex> lock(webrtc_mutex);
         
-        current_peer_id = peer_id;
-        
-        if (pipeline) {
-            std::cout << "Pipeline already running" << std::endl;
+        // Check if we're already handling this peer with an active pipeline
+        if (pipeline && current_peer_id == peer_id) {
+            std::cout << "Already handling peer: " << peer_id << " - ignoring duplicate offer" << std::endl;
             return;
         }
         
-        // Create GStreamer pipeline for H.264 video file streaming
+        // If handling a different peer, stop the old pipeline
+        if (pipeline) {
+            std::cout << "Stopping old pipeline for peer: " << current_peer_id << std::endl;
+            gst_element_set_state(pipeline, GST_STATE_NULL);
+            gst_object_unref(pipeline);
+            pipeline = nullptr;
+            webrtcbin = nullptr;
+            local_candidates.clear();
+        }
+        
+        current_peer_id = peer_id;
+        std::cout << "Creating new pipeline for peer: " << peer_id << std::endl;
+        
+        // Create simplified GStreamer pipeline - let WebRTC handle codec negotiation automatically
         std::string pipeline_str = 
+            "webrtcbin name=sendonly bundle-policy=max-bundle stun-server=stun://stun.l.google.com:19302 "
             "filesrc location=" + video_file + " ! "
-            "qtdemux ! h264parse ! "
-            "rtph264pay config-interval=-1 pt=96 ! "
-            "application/x-rtp,media=video,encoding-name=H264,payload=96 ! "
-            "webrtcbin name=sendonly bundle-policy=max-bundle stun-server=" + stun_server;
+            "qtdemux name=demux "
+            "demux.video_0 ! queue max-size-buffers=20 ! h264parse config-interval=1 ! "
+            "rtph264pay config-interval=1 name=pay0 ! sendonly. "
+            "audiotestsrc is-live=true wave=silence ! "
+            "audioconvert ! audioresample ! "
+            "opusenc bitrate=64000 ! rtpopuspay name=pay1 ! sendonly.";
         
         GError *error = nullptr;
         pipeline = gst_parse_launch(pipeline_str.c_str(), &error);
         
         if (error) {
-            std::cerr << "Failed to create pipeline: " << error->message << std::endl;
+            std::cerr << "❌ Failed to create pipeline: " << error->message << std::endl;
             g_error_free(error);
             return;
         }
         
         // Get webrtcbin element
         webrtcbin = gst_bin_get_by_name(GST_BIN(pipeline), "sendonly");
+        if (!webrtcbin) {
+            std::cerr << "❌ Failed to get webrtcbin element" << std::endl;
+            gst_object_unref(pipeline);
+            pipeline = nullptr;
+            return;
+        }
         
-        // Connect to signals
-        g_signal_connect(webrtcbin, "on-negotiation-needed",
-            G_CALLBACK(onNegotiationNeeded), this);
-        
+        // Set up WebRTC callbacks BEFORE starting pipeline
         g_signal_connect(webrtcbin, "on-ice-candidate",
             G_CALLBACK(onIceCandidate), this);
         
         g_signal_connect(webrtcbin, "notify::ice-gathering-state",
             G_CALLBACK(onIceGatheringStateNotify), this);
         
-        // Set remote description (offer)
+        g_signal_connect(webrtcbin, "notify::connection-state",
+            G_CALLBACK(onConnectionStateNotify), this);
+        
+        std::cout << "🔧 WebRTC callbacks configured - letting WebRTC handle codec negotiation" << std::endl;
+        
+        // Start pipeline in PAUSED state first
+        GstStateChangeReturn ret = gst_element_set_state(pipeline, GST_STATE_PAUSED);
+        if (ret == GST_STATE_CHANGE_FAILURE) {
+            std::cerr << "❌ Failed to set pipeline to PAUSED" << std::endl;
+            gst_object_unref(pipeline);
+            pipeline = nullptr;
+            webrtcbin = nullptr;
+            return;
+        }
+        
+        // Wait for pipeline to reach PAUSED state
+        GstState state;
+        ret = gst_element_get_state(pipeline, &state, nullptr, 5 * GST_SECOND);
+        if (ret == GST_STATE_CHANGE_FAILURE || state != GST_STATE_PAUSED) {
+            std::cerr << "❌ Pipeline failed to reach PAUSED state" << std::endl;
+            gst_object_unref(pipeline);
+            pipeline = nullptr;
+            webrtcbin = nullptr;
+            return;
+        }
+        
+        std::cout << "✅ Pipeline created and paused for peer: " << peer_id << std::endl;
+        
+        // Now set remote description (offer)
+        setRemoteDescription(sdp_offer);
+    }
+    
+    void setRemoteDescription(const std::string& sdp_offer) {
+        if (!webrtcbin) {
+            std::cerr << "❌ No webrtcbin available for remote description" << std::endl;
+            return;
+        }
+        
         GstSDPMessage *sdp_msg;
         GstWebRTCSessionDescription *offer;
         
-        gst_sdp_message_new(&sdp_msg);
-        gst_sdp_message_parse_buffer((guint8*)sdp_offer.c_str(), sdp_offer.length(), sdp_msg);
+        // Parse SDP with better error handling
+        if (gst_sdp_message_new(&sdp_msg) != GST_SDP_OK) {
+            std::cerr << "❌ Failed to create SDP message" << std::endl;
+            return;
+        }
+        
+        if (gst_sdp_message_parse_buffer((guint8*)sdp_offer.c_str(), sdp_offer.length(), sdp_msg) != GST_SDP_OK) {
+            std::cerr << "❌ Failed to parse SDP buffer" << std::endl;
+            gst_sdp_message_free(sdp_msg);
+            return;
+        }
+        
         offer = gst_webrtc_session_description_new(GST_WEBRTC_SDP_TYPE_OFFER, sdp_msg);
+        if (!offer) {
+            std::cerr << "❌ Failed to create WebRTC session description" << std::endl;
+            return;
+        }
         
-        GstPromise *promise = gst_promise_new();
+        std::cout << "📥 Setting remote description..." << std::endl;
+        
+        GstPromise *promise = gst_promise_new_with_change_func(
+            [](GstPromise *promise, gpointer user_data) {
+                GStreamerWebRTCSender *self = static_cast<GStreamerWebRTCSender*>(user_data);
+                const GstStructure *reply = gst_promise_get_reply(promise);
+                
+                if (reply && gst_structure_has_field(reply, "error")) {
+                    const GValue *error_val = gst_structure_get_value(reply, "error");
+                    GError *error = (GError*)g_value_get_boxed(error_val);
+                    std::cerr << "❌ Failed to set remote description: " << error->message << std::endl;
+                } else {
+                    std::cout << "✅ Remote description set successfully" << std::endl;
+                    
+                    // Start pipeline to PLAYING state
+                    gst_element_set_state(self->pipeline, GST_STATE_PLAYING);
+                    std::cout << "▶️  Pipeline set to PLAYING state" << std::endl;
+                    
+                    // Create answer
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    self->createAnswer();
+                }
+                gst_promise_unref(promise);
+            }, this, nullptr);
+        
         g_signal_emit_by_name(webrtcbin, "set-remote-description", offer, promise);
-        gst_promise_interrupt(promise);
-        gst_promise_unref(promise);
+        gst_webrtc_session_description_free(offer);
+    }
+    
+
+    void createAnswer() {
+        if (!webrtcbin) {
+            std::cerr << "❌ No webrtcbin available for creating answer" << std::endl;
+            return;
+        }
         
-        // Start pipeline
-        gst_element_set_state(pipeline, GST_STATE_PLAYING);
-        std::cout << "Pipeline started for peer: " << peer_id << std::endl;
+        std::cout << "📝 Creating WebRTC answer..." << std::endl;
+        
+        GstPromise *promise = gst_promise_new_with_change_func(
+            [](GstPromise *promise, gpointer user_data) {
+                GStreamerWebRTCSender *self = static_cast<GStreamerWebRTCSender*>(user_data);
+                self->onAnswerCreated(promise);
+            }, this, nullptr);
+        
+        g_signal_emit_by_name(webrtcbin, "create-answer", nullptr, promise);
     }
     
     void stopPipeline() {
@@ -258,47 +368,64 @@ public:
         }
     }
     
-    static void onNegotiationNeeded(GstElement *element, gpointer user_data) {
-        GStreamerWebRTCSender *self = static_cast<GStreamerWebRTCSender*>(user_data);
-        GstPromise *promise;
-        
-        std::cout << "Creating answer..." << std::endl;
-        
-        promise = gst_promise_new_with_change_func(
-            [](GstPromise *promise, gpointer user_data) {
-                GStreamerWebRTCSender *self = static_cast<GStreamerWebRTCSender*>(user_data);
-                self->onAnswerCreated(promise);
-            }, user_data, nullptr);
-        
-        g_signal_emit_by_name(element, "create-answer", nullptr, promise);
-    }
-    
     void onAnswerCreated(GstPromise *promise) {
-        GstWebRTCSessionDescription *answer = nullptr;
-        const GstStructure *reply;
+        const GstStructure *reply = gst_promise_get_reply(promise);
         
-        reply = gst_promise_get_reply(promise);
-        gst_structure_get(reply, "answer", GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &answer, nullptr);
-        gst_promise_unref(promise);
+        if (reply && gst_structure_has_field(reply, "error")) {
+            const GValue *error_val = gst_structure_get_value(reply, "error");
+            GError *error = (GError*)g_value_get_boxed(error_val);
+            std::cerr << "❌ Failed to create answer: " << error->message << std::endl;
+            gst_promise_unref(promise);
+            return;
+        }
+        
+        GstWebRTCSessionDescription *answer = nullptr;
+        if (!gst_structure_get(reply, "answer", GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &answer, nullptr) || !answer) {
+            std::cerr << "❌ No answer in reply structure" << std::endl;
+            gst_promise_unref(promise);
+            return;
+        }
+        
+        std::cout << "✅ Answer created successfully" << std::endl;
         
         // Set local description
-        GstPromise *local_promise = gst_promise_new();
+        GstPromise *local_promise = gst_promise_new_with_change_func(
+            [](GstPromise *promise, gpointer user_data) {
+                const GstStructure *reply = gst_promise_get_reply(promise);
+                if (reply && gst_structure_has_field(reply, "error")) {
+                    const GValue *error_val = gst_structure_get_value(reply, "error");
+                    GError *error = (GError*)g_value_get_boxed(error_val);
+                    std::cerr << "❌ Failed to set local description: " << error->message << std::endl;
+                } else {
+                    std::cout << "✅ Local description set successfully" << std::endl;
+                }
+                gst_promise_unref(promise);
+            }, this, nullptr);
+        
         g_signal_emit_by_name(webrtcbin, "set-local-description", answer, local_promise);
-        gst_promise_interrupt(local_promise);
-        gst_promise_unref(local_promise);
         
         // Send answer via MQTT to <thingname>/robot-control/<peerId>/answer
         gchar *sdp_string = gst_sdp_message_as_text(answer->sdp);
         
-        // Send raw SDP (like your existing code)
-        std::string answer_topic = getAnswerTopic(current_peer_id);
-        mosquitto_publish(mqtt_client, nullptr, answer_topic.c_str(), 
-                         strlen(sdp_string), sdp_string, 0, false);
+        if (sdp_string) {
+            // Send raw SDP (like your existing code)
+            std::string answer_topic = getAnswerTopic(current_peer_id);
+            int ret = mosquitto_publish(mqtt_client, nullptr, answer_topic.c_str(), 
+                             strlen(sdp_string), sdp_string, 0, false);
+            
+            if (ret == MOSQ_ERR_SUCCESS) {
+                std::cout << "📤 Answer sent to topic: " << answer_topic << std::endl;
+            } else {
+                std::cerr << "❌ Failed to publish answer: " << mosquitto_strerror(ret) << std::endl;
+            }
+            
+            g_free(sdp_string);
+        } else {
+            std::cerr << "❌ Failed to convert SDP to string" << std::endl;
+        }
         
-        std::cout << "Answer sent to topic: " << answer_topic << std::endl;
-        
-        g_free(sdp_string);
         gst_webrtc_session_description_free(answer);
+        gst_promise_unref(promise);
     }
     
     static void onIceCandidate(GstElement *element, guint mlineindex, gchar *candidate, gpointer user_data) {
@@ -350,7 +477,39 @@ public:
                 break;
         }
         
-        std::cout << "ICE gathering state: " << state_name << std::endl;
+        std::cout << "🧊 ICE gathering state: " << state_name << std::endl;
+    }
+    
+    static void onConnectionStateNotify(GstElement *element, GParamSpec *pspec, gpointer user_data) {
+        GStreamerWebRTCSender *self = static_cast<GStreamerWebRTCSender*>(user_data);
+        GstWebRTCPeerConnectionState conn_state;
+        g_object_get(element, "connection-state", &conn_state, nullptr);
+        
+        const char *state_name = "unknown";
+        switch (conn_state) {
+            case GST_WEBRTC_PEER_CONNECTION_STATE_NEW:
+                state_name = "new";
+                break;
+            case GST_WEBRTC_PEER_CONNECTION_STATE_CONNECTING:
+                state_name = "connecting";
+                break;
+            case GST_WEBRTC_PEER_CONNECTION_STATE_CONNECTED:
+                state_name = "connected";
+                std::cout << "🎉 WebRTC connection established!" << std::endl;
+                break;
+            case GST_WEBRTC_PEER_CONNECTION_STATE_DISCONNECTED:
+                state_name = "disconnected";
+                break;
+            case GST_WEBRTC_PEER_CONNECTION_STATE_FAILED:
+                state_name = "failed";
+                std::cout << "❌ WebRTC connection failed!" << std::endl;
+                break;
+            case GST_WEBRTC_PEER_CONNECTION_STATE_CLOSED:
+                state_name = "closed";
+                break;
+        }
+        
+        std::cout << "🔗 WebRTC connection state: " << state_name << std::endl;
     }
     
     void sendCollectedIceCandidates() {
