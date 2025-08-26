@@ -829,9 +829,28 @@ void WebRTCManager::startLiveVideoStreaming(const std::string& peer_id) {
                 int frame_count = 0;
                 const auto frame_duration = std::chrono::milliseconds(33); // 30 FPS (33ms per frame)
                 
-                std::cout << "📹 Starting real video frame streaming at 10fps..." << std::endl;
+                std::cout << "📹 Starting real video from bag_processor data..." << std::endl;
                 
-                // Load images from the extracted images directory
+                // Try H.264 video file first (more efficient than individual images)
+                std::string h264_file = "/workspace/videos/flir_id8_image_resized_30fps.mp4";
+                std::ifstream video_file(h264_file);
+                
+                if (video_file.good()) {
+                    std::cout << "🎬 Found H.264 video file, using direct streaming: " << h264_file << std::endl;
+                    video_file.close();
+                    
+                    // Use existing H264 file streaming method
+                    if (this->startH264FileStreaming(peer_id, h264_file)) {
+                        std::cout << "✅ H.264 file streaming started successfully" << std::endl;
+                        return;
+                    } else {
+                        std::cout << "⚠️ H.264 streaming failed, falling back to images..." << std::endl;
+                    }
+                } else {
+                    std::cout << "⚠️ H.264 video file not found: " << h264_file << std::endl;
+                }
+                
+                // Fallback: Load individual images from bag_processor (now copied to /workspace/videos/)
                 auto image_files = getImageFiles("/workspace/videos");
                 if (image_files.empty()) {
                     std::cout << "⚠️ No images found, creating sample frames instead..." << std::endl;
