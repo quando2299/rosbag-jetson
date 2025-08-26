@@ -224,9 +224,10 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
         // Step 4: Add video stream to PeerConnection  
         std::cout << "🎬 Step 4: Adding video stream to PeerConnection" << std::endl;
         try {
-            // Create video media description with H264 codec
+            // Create video media description with more flexible codec configuration
             rtc::Description::Video video("video", rtc::Description::Direction::SendOnly);
-            video.addH264Codec(96, "packetization-mode=1;level-asymmetry-allowed=1"); 
+            // Use more flexible H.264 configuration that works with libdatachannel
+            video.addH264Codec(96, "packetization-mode=0"); // Mode 0 is simpler for single NAL units
             video.setBitrate(1000); // 1 Mbps
             
             // Add track with H264 RTP packetizer configured for long start sequences
@@ -587,40 +588,35 @@ void WebRTCManager::sendH264Frame(std::shared_ptr<rtc::Track> track, const cv::M
     }
     
     try {
-        // Convert OpenCV Mat to H.264 NAL unit with proper 4-byte start codes
-        std::vector<uint8_t> h264_data;
+        // CRITICAL: Don't manually encode H.264!
+        // robot_simulator works because Flutter WebRTC automatically handles encoding
+        // We need to send RAW frame data and let libdatachannel handle H.264 encoding
         
-        // Create a simple H.264 frame structure for WebRTC
-        // Add 4-byte start code (0x00 0x00 0x00 0x01) as required by libdatachannel
-        h264_data.push_back(0x00);
-        h264_data.push_back(0x00);  
-        h264_data.push_back(0x00);
-        h264_data.push_back(0x01);
-        
-        // Add NAL unit header (IDR frame)
-        h264_data.push_back(0x65); // NAL unit type 5 (IDR slice)
-        
-        // Encode frame as JPEG and append as payload (simplified approach)
-        std::vector<uchar> encoded_image;
-        std::vector<int> compression_params = {cv::IMWRITE_JPEG_QUALITY, 70};
-        
-        if (!cv::imencode(".jpg", frame, encoded_image, compression_params)) {
-            std::cout << "⚠️  Failed to encode frame" << std::endl;
-            return;
+        // Convert BGR to RGB (libdatachannel expects RGB)
+        cv::Mat rgb_frame;
+        if (frame.channels() == 3) {
+            cv::cvtColor(frame, rgb_frame, cv::COLOR_BGR2RGB);
+        } else {
+            cv::cvtColor(frame, rgb_frame, cv::COLOR_GRAY2RGB);
         }
         
-        // Append JPEG data as H.264 payload (simplified for testing)
-        h264_data.insert(h264_data.end(), encoded_image.begin(), encoded_image.end());
+        // Ensure frame is continuous in memory
+        if (!rgb_frame.isContinuous()) {
+            rgb_frame = rgb_frame.clone();
+        }
         
-        // Send H.264 data with proper start codes
-        if (track->send(reinterpret_cast<const rtc::byte*>(h264_data.data()), h264_data.size())) {
-            // Success - H.264 frame sent with 4-byte start codes
-        } else {
-            std::cout << "⚠️  Failed to send H264 frame data" << std::endl;
+        // Send RAW RGB pixel data - let libdatachannel handle H.264 encoding automatically
+        const size_t data_size = rgb_frame.total() * rgb_frame.elemSize();
+        const uint8_t* data_ptr = rgb_frame.ptr<uint8_t>();
+        
+        bool success = track->send(reinterpret_cast<const rtc::byte*>(data_ptr), data_size);
+        
+        if (!success) {
+            std::cout << "⚠️  Failed to send raw frame data" << std::endl;
         }
         
     } catch (const std::exception& e) {
-        std::cerr << "❌ Error sending H264 frame: " << e.what() << std::endl;
+        std::cerr << "❌ Error sending frame: " << e.what() << std::endl;
     }
 }
 
