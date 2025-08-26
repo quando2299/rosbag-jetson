@@ -492,9 +492,30 @@ std::vector<std::string> WebRTCManager::getImageFiles(const std::string& directo
     std::vector<std::string> image_files;
     
     try {
-        // Use OpenCV to find image files
+        // Use OpenCV to find image files - try multiple extensions
         std::vector<cv::String> files;
+        
+        // Try .jpg extension first
         cv::glob(directory + "/*.jpg", files);
+        std::cout << "🔍 Found " << files.size() << " .jpg files" << std::endl;
+        
+        // If no .jpg files found, try .jpeg extension
+        if (files.empty()) {
+            cv::glob(directory + "/*.jpeg", files);
+            std::cout << "🔍 Found " << files.size() << " .jpeg files" << std::endl;
+        }
+        
+        // If still no files, try .JPG extension
+        if (files.empty()) {
+            cv::glob(directory + "/*.JPG", files);
+            std::cout << "🔍 Found " << files.size() << " .JPG files" << std::endl;
+        }
+        
+        // If still no files, try .JPEG extension
+        if (files.empty()) {
+            cv::glob(directory + "/*.JPEG", files);
+            std::cout << "🔍 Found " << files.size() << " .JPEG files" << std::endl;
+        }
         
         // Convert to std::string and sort
         for (const auto& file : files) {
@@ -504,7 +525,16 @@ std::vector<std::string> WebRTCManager::getImageFiles(const std::string& directo
         // Sort files by name to ensure correct order
         std::sort(image_files.begin(), image_files.end());
         
-        std::cout << "🔍 Found " << image_files.size() << " JPG files in " << directory << std::endl;
+        std::cout << "🔍 Total " << image_files.size() << " image files found in " << directory << std::endl;
+        
+        // Debug: show first few filenames if found
+        if (!image_files.empty()) {
+            std::cout << "📂 Sample files: ";
+            for (size_t i = 0; i < std::min(size_t(3), image_files.size()); i++) {
+                std::cout << image_files[i] << " ";
+            }
+            std::cout << std::endl;
+        }
         
     } catch (const std::exception& e) {
         std::cerr << "❌ Error reading directory " << directory << ": " << e.what() << std::endl;
