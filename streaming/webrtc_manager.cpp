@@ -587,40 +587,31 @@ void WebRTCManager::sendH264Frame(std::shared_ptr<rtc::Track> track, const cv::M
     }
     
     try {
-        // Convert OpenCV Mat to H.264 NAL unit with proper 4-byte start codes
-        std::vector<uint8_t> h264_data;
-        
-        // Create a simple H.264 frame structure for WebRTC
-        // Add 4-byte start code (0x00 0x00 0x00 0x01) as required by libdatachannel
-        h264_data.push_back(0x00);
-        h264_data.push_back(0x00);  
-        h264_data.push_back(0x00);
-        h264_data.push_back(0x01);
-        
-        // Add NAL unit header (IDR frame)
-        h264_data.push_back(0x65); // NAL unit type 5 (IDR slice)
-        
-        // Encode frame as JPEG and append as payload (simplified approach)
-        std::vector<uchar> encoded_image;
-        std::vector<int> compression_params = {cv::IMWRITE_JPEG_QUALITY, 70};
-        
-        if (!cv::imencode(".jpg", frame, encoded_image, compression_params)) {
-            std::cout << "⚠️  Failed to encode frame" << std::endl;
-            return;
+        // Convert OpenCV Mat to raw RGB data that libdatachannel can encode
+        // This is similar to how Flutter getUserMedia provides raw video frames
+        cv::Mat rgb_frame;
+        if (frame.channels() == 3) {
+            cv::cvtColor(frame, rgb_frame, cv::COLOR_BGR2RGB);
+        } else {
+            rgb_frame = frame.clone();
         }
         
-        // Append JPEG data as H.264 payload (simplified for testing)
-        h264_data.insert(h264_data.end(), encoded_image.begin(), encoded_image.end());
+        // Ensure frame is in the right format and size
+        cv::Mat resized_frame;
+        cv::resize(rgb_frame, resized_frame, cv::Size(640, 480));
         
-        // Send H.264 data with proper start codes
-        if (track->send(reinterpret_cast<const rtc::byte*>(h264_data.data()), h264_data.size())) {
-            // Success - H.264 frame sent with 4-byte start codes
+        // Send raw RGB frame data - let libdatachannel handle H.264 encoding
+        // This is the correct approach - send raw video data, not pre-encoded H.264
+        size_t data_size = resized_frame.total() * resized_frame.elemSize();
+        
+        if (track->send(reinterpret_cast<const rtc::byte*>(resized_frame.data), data_size)) {
+            // Success - raw frame sent, libdatachannel will handle H.264 encoding
         } else {
-            std::cout << "⚠️  Failed to send H264 frame data" << std::endl;
+            std::cout << "⚠️  Failed to send raw frame data" << std::endl;
         }
         
     } catch (const std::exception& e) {
-        std::cerr << "❌ Error sending H264 frame: " << e.what() << std::endl;
+        std::cerr << "❌ Error sending raw frame: " << e.what() << std::endl;
     }
 }
 
