@@ -29,6 +29,10 @@ docker run \
     --network host \
     --platform linux/$(uname -m | sed 's/x86_64/amd64/') \
     --name mqtt-streaming-client \
+    --device=/dev/video0:/dev/video0 \
+    --device=/dev/video1:/dev/video1 \
+    --device=/dev/video2:/dev/video2 \
+    --privileged \
     mqtt-streaming:latest
 
 if [ $? -eq 0 ]; then
