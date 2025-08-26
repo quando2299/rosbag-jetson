@@ -36,7 +36,7 @@ rtc::Configuration WebRTCManager::getRTCConfig() {
     rtc::Configuration config;
     
     // Use original working STUN configuration
-    config.iceServers.emplace_back("stun:stun..google.com:19302");
+    config.iceServers.emplace_back("stun:stun.l.google.com:19302");
     config.iceServers.emplace_back("stun:stun1.l.google.com:19302");
     config.iceServers.emplace_back("stun:stun2.l.google.com:19302");
     config.iceServers.emplace_back("stun:stun3.l.google.com:19302");
@@ -182,21 +182,9 @@ void WebRTCManager::setupICEHandling(const std::string& peer_id, std::shared_ptr
         bool has_audio = sdp_answer.find("m=audio") != std::string::npos;
         bool has_video = sdp_answer.find("m=video") != std::string::npos;
         
-        std::cout << "🔍 Original SDP Answer contains:" << std::endl;
-        std::cout << "   🎵 Audio track: " << (has_audio ? "YES (❌ UNWANTED)" : "NO (✅ CORRECT)") << std::endl;
-        std::cout << "   📺 Video track: " << (has_video ? "YES (✅ CORRECT)" : "NO (❌ MISSING)") << std::endl;
-        
-        // Remove audio track from SDP if present
-        if (has_audio) {
-            std::cout << "🔧 Removing audio track from SDP answer..." << std::endl;
-            sdp_answer = removeAudioFromSDP(sdp_answer);
-            
-            // Verify audio was removed
-            bool still_has_audio = sdp_answer.find("m=audio") != std::string::npos;
-            std::cout << "✅ Modified SDP Answer contains:" << std::endl;
-            std::cout << "   🎵 Audio track: " << (still_has_audio ? "YES (❌ FAILED TO REMOVE)" : "NO (✅ REMOVED)") << std::endl;
-            std::cout << "   📺 Video track: YES (✅ KEPT)" << std::endl;
-        }
+        std::cout << "🔍 Generated SDP Answer contains:" << std::endl;
+        std::cout << "   🎵 Audio track: " << (has_audio ? "YES" : "NO") << std::endl;
+        std::cout << "   📺 Video track: " << (has_video ? "YES" : "NO") << std::endl;
         
         std::cout << "🔍 DEBUG: Generated SDP Answer:" << std::endl;
         std::cout << "--- SDP START ---" << std::endl;
@@ -269,13 +257,6 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
         // Step 5: Set remote description using received offer
         std::cout << "📥 Step 5: Setting remote description using received offer" << std::endl;
         std::cout << "🔍 DEBUG: Received offer SDP length: " << offer_sdp.length() << " chars" << std::endl;
-        
-        // Check if incoming offer contains audio
-        if (offer_sdp.find("m=audio") != std::string::npos) {
-            std::cout << "🎵 WARNING: Incoming offer contains audio track - this will be rejected" << std::endl;
-        } else {
-            std::cout << "📺 Incoming offer is video-only" << std::endl;
-        }
         
         try {
             rtc::Description offer(offer_sdp, rtc::Description::Type::Offer);
@@ -848,26 +829,52 @@ void WebRTCManager::startLiveVideoStreaming(const std::string& peer_id) {
                 int frame_count = 0;
                 const auto frame_duration = std::chrono::milliseconds(33); // 30 FPS (33ms per frame)
                 
-                std::cout << "📹 Sending simple test video data at 5fps..." << std::endl;
+                std::cout << "📹 Starting real video frame streaming at 10fps..." << std::endl;
                 
-                while (active && frame_count < 100) { // Limit to 100 frames for testing
-                    // Send very simple test data instead of H264
-                    std::string test_data = "VIDEO_FRAME_" + std::to_string(frame_count) + "_DATA";
-                    
+                // Load images from the extracted images directory
+                auto image_files = getImageFiles("/workspace/videos");
+                if (image_files.empty()) {
+                    std::cout << "⚠️ No images found, creating sample frames instead..." << std::endl;
+                }
+                
+                while (active && frame_count < 300) { // Stream for 30 seconds at 10fps
                     try {
                         // Check if track is available and ready
                         if (track && track->isOpen()) {
-                            // Send simple test data
-                            rtc::binary packet;
-                            for (char c : test_data) {
-                                packet.push_back(static_cast<std::byte>(c));
-                            }
-                            
-                            bool sent = track->send(packet);
-                            
-                            if (frame_count % 5 == 0) { // Log every 5 frames
-                                std::cout << "📤 Frame " << frame_count << ": " << (sent ? "✅ SENT" : "❌ FAILED") 
-                                         << " (" << test_data.length() << " bytes)" << std::endl;
+                            // Instead of synthetic H264, send actual image data
+                            if (!image_files.empty()) {
+                                // Use real images (cycling through available images)
+                                size_t img_index = frame_count % image_files.size();
+                                cv::Mat frame = loadAndResizeImage(image_files[img_index]);
+                                
+                                if (!frame.empty()) {
+                                    // Encode as JPEG (similar to robot_simulator approach)
+                                    std::vector<uchar> jpeg_data;
+                                    std::vector<int> compression_params = {cv::IMWRITE_JPEG_QUALITY, 80};
+                                    
+                                    if (cv::imencode(".jpg", frame, jpeg_data, compression_params)) {
+                                        // Send JPEG data directly
+                                        bool sent = track->send(reinterpret_cast<const rtc::byte*>(jpeg_data.data()), jpeg_data.size());
+                                        
+                                        if (frame_count % 10 == 0) { // Log every second
+                                            std::cout << "📤 Frame " << frame_count << ": " << (sent ? "✅ SENT" : "❌ FAILED") 
+                                                     << " (" << jpeg_data.size() << " bytes JPEG)" << std::endl;
+                                        }
+                                    }
+                                }
+                            } else {
+                                // Fallback: send simple frame data
+                                std::string frame_data = "FRAME_" + std::to_string(frame_count);
+                                rtc::binary packet;
+                                for (char c : frame_data) {
+                                    packet.push_back(static_cast<std::byte>(c));
+                                }
+                                bool sent = track->send(packet);
+                                
+                                if (frame_count % 10 == 0) {
+                                    std::cout << "📤 Frame " << frame_count << ": " << (sent ? "✅ SENT" : "❌ FAILED") 
+                                             << " (" << frame_data.length() << " bytes)" << std::endl;
+                                }
                             }
                         } else {
                             std::cout << "⚠️ Track not ready - Frame " << frame_count << std::endl;
@@ -877,7 +884,7 @@ void WebRTCManager::startLiveVideoStreaming(const std::string& peer_id) {
                     }
                     
                     frame_count++;
-                    std::this_thread::sleep_for(std::chrono::milliseconds(200)); // 5 fps
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // 10 fps
                 }
                 
                 std::cout << "✅ Live video streaming stopped (" << frame_count << " frames sent)" << std::endl;
