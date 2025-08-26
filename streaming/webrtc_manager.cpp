@@ -576,22 +576,30 @@ void WebRTCManager::sendH264Frame(std::shared_ptr<rtc::Track> track, const cv::M
     }
     
     try {
-        // Encode frame as JPEG for WebRTC (simpler approach)
-        std::vector<uchar> encoded_image;
-        std::vector<int> compression_params = {cv::IMWRITE_JPEG_QUALITY, 80};
-        
-        if (!cv::imencode(".jpg", frame, encoded_image, compression_params)) {
-            std::cout << "⚠️  Failed to encode frame" << std::endl;
+        // Send raw BGR frame data (libdatachannel will handle video encoding)
+        if (!frame.isContinuous()) {
+            std::cout << "⚠️  Frame is not continuous in memory" << std::endl;
             return;
         }
         
-        // Convert to rtc::binary
-        rtc::binary packet;
-        packet.reserve(encoded_image.size());
-        
-        for (const auto& byte : encoded_image) {
-            packet.push_back(static_cast<std::byte>(byte));
+        // Ensure frame is in BGR format (OpenCV default)
+        cv::Mat bgr_frame;
+        if (frame.channels() == 3) {
+            bgr_frame = frame;
+        } else if (frame.channels() == 1) {
+            cv::cvtColor(frame, bgr_frame, cv::COLOR_GRAY2BGR);
+        } else {
+            std::cout << "⚠️  Unsupported frame format" << std::endl;
+            return;
         }
+        
+        // Get raw frame data
+        const size_t data_size = bgr_frame.total() * bgr_frame.elemSize();
+        const uint8_t* data_ptr = bgr_frame.ptr<uint8_t>();
+        
+        // Create binary packet with raw frame data
+        rtc::binary packet(reinterpret_cast<const std::byte*>(data_ptr), 
+                          reinterpret_cast<const std::byte*>(data_ptr + data_size));
         
         if (track->send(packet)) {
             // Success - frame sent
