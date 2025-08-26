@@ -177,6 +177,15 @@ void WebRTCManager::setupICEHandling(const std::string& peer_id, std::shared_ptr
         
         // Get the generated SDP answer
         std::string sdp_answer = description;
+        
+        // Check what tracks are in our answer
+        bool has_audio = sdp_answer.find("m=audio") != std::string::npos;
+        bool has_video = sdp_answer.find("m=video") != std::string::npos;
+        
+        std::cout << "🔍 Generated SDP Answer contains:" << std::endl;
+        std::cout << "   🎵 Audio track: " << (has_audio ? "YES (❌ UNWANTED)" : "NO (✅ CORRECT)") << std::endl;
+        std::cout << "   📺 Video track: " << (has_video ? "YES (✅ CORRECT)" : "NO (❌ MISSING)") << std::endl;
+        
         std::cout << "🔍 DEBUG: Generated SDP Answer:" << std::endl;
         std::cout << "--- SDP START ---" << std::endl;
         std::cout << sdp_answer << std::endl;
@@ -248,6 +257,13 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
         // Step 5: Set remote description using received offer
         std::cout << "📥 Step 5: Setting remote description using received offer" << std::endl;
         std::cout << "🔍 DEBUG: Received offer SDP length: " << offer_sdp.length() << " chars" << std::endl;
+        
+        // Check if incoming offer contains audio
+        if (offer_sdp.find("m=audio") != std::string::npos) {
+            std::cout << "🎵 WARNING: Incoming offer contains audio track - this will be rejected" << std::endl;
+        } else {
+            std::cout << "📺 Incoming offer is video-only" << std::endl;
+        }
         
         try {
             rtc::Description offer(offer_sdp, rtc::Description::Type::Offer);
