@@ -65,7 +65,14 @@ std::shared_ptr<rtc::PeerConnection> WebRTCManager::createPeerConnection(const s
             case rtc::PeerConnection::State::Connected:
                 std::cout << "Connected" << std::endl;
                 std::cout << "✅ WebRTC connection established for " << peer_id << std::endl;
-                std::cout << "🎯 Ready for video streaming via WebRTC data channel" << std::endl;
+                std::cout << "🎯 Starting video streaming immediately on connection established" << std::endl;
+                
+                // Start video streaming immediately when connection is established
+                std::thread([this, peer_id]() {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // Wait 1 second for connection to stabilize
+                    std::cout << "🎬 Starting video streaming for connected peer " << peer_id << std::endl;
+                    this->startLiveVideoStreaming(peer_id);
+                }).detach();
                 break;
             case rtc::PeerConnection::State::Disconnected:
                 std::cout << "Disconnected" << std::endl;
@@ -221,14 +228,7 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
             video_track->onOpen([this, peer_id]() {
                 std::cout << "🎉 TRACK OPENED CALLBACK TRIGGERED for " << peer_id << std::endl;
                 std::cout << "✅ Video track opened for " << peer_id << std::endl;
-                std::cout << "🎥 Track is ready - starting video streaming thread..." << std::endl;
-                
-                // Start video streaming when track opens
-                std::thread([this, peer_id]() {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                    std::cout << "🎬 Starting live video frame streaming via WebRTC..." << std::endl;
-                    this->startLiveVideoStreaming(peer_id);
-                }).detach();
+                std::cout << "📺 Track is ready (streaming will start on connection established)" << std::endl;
             });
             
             video_track->onClosed([this, peer_id]() {
