@@ -12,6 +12,7 @@
 #include <fstream>
 #include <vector>
 #include <opencv2/opencv.hpp>
+#include "h264_encoder.hpp"
 #endif
 
 #include <json/json.h>
@@ -71,6 +72,9 @@ private:
     // Streaming control
     std::map<std::string, std::atomic<bool>> streaming_active_;
     std::map<std::string, std::thread> streaming_threads_;
+    
+    // H.264 encoder for proper video encoding (like robot_simulator automatic encoding)
+    std::unique_ptr<H264Encoder> h264_encoder_;
     
     // WebRTC configuration
     rtc::Configuration getRTCConfig();

@@ -50,7 +50,16 @@ RUN apt-get update && apt-get install -y \
     v4l-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Build and install libdatachannel from source (lightweight WebRTC library)
+# Install FFmpeg for proper H.264 encoding (like robot_simulator's automatic encoding)
+RUN apt-get update && apt-get install -y \
+    libx264-dev \
+    libavcodec-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libswscale-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build and install libdatachannel with proper H.264 support
 RUN git clone --depth 1 --branch v0.20.0 https://github.com/paullouisageneau/libdatachannel.git /tmp/libdatachannel && \
     cd /tmp/libdatachannel && \
     git submodule update --init --recursive && \
@@ -64,8 +73,8 @@ RUN git clone --depth 1 --branch v0.20.0 https://github.com/paullouisageneau/lib
 # Set working directory
 WORKDIR /workspace
 
-# Copy source code
-COPY mqtt_client.cpp CMakeLists.txt webrtc_manager.hpp webrtc_manager.cpp ./
+# Copy source code (using libdatachannel with proper H.264 encoder)
+COPY mqtt_client.cpp CMakeLists.txt webrtc_manager.hpp webrtc_manager.cpp h264_encoder.hpp h264_encoder.cpp ./
 
 # Copy video files directory (prepare-videos.sh should be run first)
 # COPY videos/ /workspace/videos/

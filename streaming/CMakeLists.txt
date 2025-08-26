@@ -28,15 +28,20 @@ add_definitions(-DWEBRTC_ENABLED)
 # Enable JSON support
 add_definitions(-DJSON_ENABLED)
 
-# Add executable for MQTT client
-add_executable(mqtt_client mqtt_client.cpp webrtc_manager.cpp)
+# Add executable for MQTT client (using libdatachannel with proper H.264 encoding)
+add_executable(mqtt_client mqtt_client.cpp webrtc_manager.cpp h264_encoder.cpp)
 
-# Link libraries
+# Link libraries - libdatachannel + FFmpeg for proper H.264 encoding like robot_simulator
 target_link_libraries(mqtt_client 
     ${OpenCV_LIBS} 
     Threads::Threads
     mosquitto
     datachannel
+    avcodec
+    avformat
+    avutil
+    swscale
+    x264
 )
 
 # Add JSON support if available

@@ -585,61 +585,37 @@ void WebRTCManager::sendH264Frame(std::shared_ptr<rtc::Track> track, const cv::M
     }
     
     try {
-        // Use OpenCV's built-in video encoding capabilities
-        // This mirrors robot_simulator's approach of letting the system handle encoding
-        static cv::VideoWriter writer;
-        static bool writer_initialized = false;
-        static std::string temp_video = "/tmp/webrtc_stream.h264";
-        static int frame_counter = 0;
-        
-        if (!writer_initialized) {
-            // Initialize H.264 encoder with OpenCV (similar to getUserMedia approach)
-            int fourcc = cv::VideoWriter::fourcc('H', '2', '6', '4');
-            writer.open(temp_video, fourcc, 15.0, cv::Size(320, 240), true);
-            writer_initialized = true;
-            std::cout << "🎥 OpenCV H.264 encoder initialized (mimicking robot_simulator MediaStream)" << std::endl;
+        // Initialize H.264 encoder if not already done (like robot_simulator video initialization)
+        if (!h264_encoder_) {
+            h264_encoder_ = std::make_unique<H264Encoder>();
+            if (!h264_encoder_->initialize(320, 240, 30, 1000000)) { // 1Mbps bitrate
+                std::cerr << "❌ Failed to initialize H.264 encoder" << std::endl;
+                return;
+            }
+            std::cout << "✅ H.264 encoder initialized (like robot_simulator automatic encoding)" << std::endl;
         }
         
-        if (writer.isOpened()) {
-            // Resize frame to standard size
-            cv::Mat resized_frame;
-            cv::resize(frame, resized_frame, cv::Size(320, 240));
-            
-            // Write frame to get proper H.264 encoding
-            writer.write(resized_frame);
-            
-            // For now, send a simple pattern that represents successful encoding
-            // This approach is closer to how robot_simulator automatically handles video
-            std::vector<uint8_t> encoded_data;
-            
-            // Create a pattern based on actual frame content (like MediaStreamTrack would)
-            cv::Scalar mean = cv::mean(resized_frame);
-            uint8_t intensity = static_cast<uint8_t>(mean[0] + mean[1] + mean[2]) / 3;
-            
-            // H.264 start code + basic header
-            encoded_data.insert(encoded_data.end(), {0x00, 0x00, 0x00, 0x01});
-            encoded_data.push_back(0x67); // SPS NAL unit type
-            
-            // Add frame-based variation (representing the actual video content)
-            for (int i = 0; i < 50; i++) {
-                encoded_data.push_back(intensity + (i % 32));
-            }
-            
-            // Send the encoded data
+        // Resize frame to encoder dimensions
+        cv::Mat resized_frame;
+        cv::resize(frame, resized_frame, cv::Size(320, 240));
+        
+        // Encode frame using proper H.264 encoder (equivalent to robot_simulator's internal encoding)
+        std::vector<uint8_t> encoded_data = h264_encoder_->encode(resized_frame);
+        
+        if (!encoded_data.empty()) {
+            // Send properly encoded H.264 data
             bool success = track->send(reinterpret_cast<const rtc::byte*>(encoded_data.data()), 
                                      encoded_data.size());
             
-            if (success && frame_counter % 60 == 0) {
-                std::cout << "✅ H.264 frame sent successfully (frame " << frame_counter 
-                         << ", intensity: " << (int)intensity << ")" << std::endl;
+            static int frame_count = 0;
+            if (success && frame_count % 60 == 0) {
+                std::cout << "✅ Proper H.264 frame sent: " << encoded_data.size() 
+                         << " bytes (frame " << frame_count << ")" << std::endl;
             } else if (!success) {
-                std::cout << "⚠️  Failed to send H.264 frame " << frame_counter << std::endl;
+                std::cout << "⚠️  Failed to send H.264 frame " << frame_count << std::endl;
             }
-        } else {
-            std::cout << "❌ OpenCV H.264 writer failed to initialize" << std::endl;
+            frame_count++;
         }
-        
-        frame_counter++;
         
     } catch (const std::exception& e) {
         std::cerr << "❌ Error in sendH264Frame: " << e.what() << std::endl;

@@ -82,6 +82,7 @@ private:
     std::string candidate_topic;
     std::string thing_name;
     
+    
 #ifdef WEBRTC_ENABLED
     std::unique_ptr<WebRTCManager> webrtc_manager;
 #else
