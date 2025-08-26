@@ -38,9 +38,9 @@ rtc::Configuration WebRTCManager::getRTCConfig() {
     // Use original working STUN configuration
     config.iceServers.emplace_back("stun:stun..google.com:19302");
     config.iceServers.emplace_back("stun:stun1.l.google.com:19302");
-    config.iceServers.emplace_back("stun:stun1.2.google.com:19302");
-    config.iceServers.emplace_back("stun:stun1.3.google.com:19302");
-    config.iceServers.emplace_back("stun:stun1.4.google.com:19302");
+    config.iceServers.emplace_back("stun:stun2.l.google.com:19302");
+    config.iceServers.emplace_back("stun:stun3.l.google.com:19302");
+    config.iceServers.emplace_back("stun:stun4.l.google.com:19302");
     
     std::cout << "🌐 WebRTC config: Using original STUN configuration" << std::endl;
     
@@ -70,6 +70,8 @@ std::shared_ptr<rtc::PeerConnection> WebRTCManager::createPeerConnection(const s
             case rtc::PeerConnection::State::Disconnected:
                 std::cout << "Disconnected" << std::endl;
                 std::cout << "⚠️ WebRTC connection disconnected for " << peer_id << std::endl;
+                std::cout << "🛑 Stopping video streaming for disconnected peer" << std::endl;
+                this->stopVideoStreaming(peer_id);
                 break;
             case rtc::PeerConnection::State::Failed:
                 std::cout << "Failed" << std::endl;
@@ -79,9 +81,13 @@ std::shared_ptr<rtc::PeerConnection> WebRTCManager::createPeerConnection(const s
                 std::cout << "   - STUN/TURN server unreachable" << std::endl;
                 std::cout << "   - ICE gathering timeout" << std::endl;
                 std::cout << "   - SDP incompatibility" << std::endl;
+                std::cout << "🛑 Stopping video streaming for failed peer" << std::endl;
+                this->stopVideoStreaming(peer_id);
                 break;
             case rtc::PeerConnection::State::Closed:
                 std::cout << "Closed" << std::endl;
+                std::cout << "🛑 Stopping video streaming for closed peer" << std::endl;
+                this->stopVideoStreaming(peer_id);
                 break;
         }
     });
@@ -222,8 +228,10 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
                 }).detach();
             });
             
-            video_track->onClosed([peer_id]() {
+            video_track->onClosed([this, peer_id]() {
                 std::cout << "❌ Video track closed for " << peer_id << std::endl;
+                std::cout << "🛑 Stopping video streaming due to track closure" << std::endl;
+                this->stopVideoStreaming(peer_id);
             });
             
             std::cout << "✅ Step 4 complete: Video stream added to PeerConnection" << std::endl;
@@ -376,22 +384,30 @@ bool WebRTCManager::startVideoStreaming(const std::string& peer_id, const std::s
 void WebRTCManager::stopVideoStreaming(const std::string& peer_id) {
     std::cout << "🛑 Stopping video streaming for " << peer_id << std::endl;
     
-    // Stop streaming
+    // Stop streaming flag
     auto active_it = streaming_active_.find(peer_id);
     if (active_it != streaming_active_.end()) {
         active_it->second = false;
+        std::cout << "   ✅ Streaming flag set to false" << std::endl;
+    } else {
+        std::cout << "   ⚠️ No active streaming found for peer " << peer_id << std::endl;
     }
     
     // Wait for thread to finish
     auto thread_it = streaming_threads_.find(peer_id);
     if (thread_it != streaming_threads_.end() && thread_it->second.joinable()) {
+        std::cout << "   ⏳ Waiting for streaming thread to stop..." << std::endl;
         thread_it->second.join();
         streaming_threads_.erase(thread_it);
+        std::cout << "   ✅ Streaming thread stopped and cleaned up" << std::endl;
+    } else {
+        std::cout << "   ⚠️ No active streaming thread found for peer " << peer_id << std::endl;
     }
     
     // Clean up
     streaming_active_.erase(peer_id);
     video_tracks_.erase(peer_id);
+    std::cout << "✅ Video streaming completely stopped for " << peer_id << std::endl;
 }
 
 void WebRTCManager::streamImagesFromDirectory(const std::string& peer_id, const std::string& images_dir) {
