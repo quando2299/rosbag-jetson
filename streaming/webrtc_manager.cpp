@@ -215,10 +215,13 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
             
             auto video_track = pc->addTrack(video);
             video_tracks_[peer_id] = video_track;
+            std::cout << "🎬 Video track created and added to PeerConnection" << std::endl;
             
             // Set up track callbacks
             video_track->onOpen([this, peer_id]() {
+                std::cout << "🎉 TRACK OPENED CALLBACK TRIGGERED for " << peer_id << std::endl;
                 std::cout << "✅ Video track opened for " << peer_id << std::endl;
+                std::cout << "🎥 Track is ready - starting video streaming thread..." << std::endl;
                 
                 // Start video streaming when track opens
                 std::thread([this, peer_id]() {
@@ -235,6 +238,7 @@ bool WebRTCManager::handleOffer(const std::string& peer_id, const std::string& o
             });
             
             std::cout << "✅ Step 4 complete: Video stream added to PeerConnection" << std::endl;
+        std::cout << "⏳ Waiting for video track to open after connection is established..." << std::endl;
             
         } catch (const std::exception& e) {
             std::cerr << "❌ Step 4 failed: " << e.what() << std::endl;
