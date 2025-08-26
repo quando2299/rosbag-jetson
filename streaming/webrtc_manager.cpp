@@ -946,9 +946,9 @@ void WebRTCManager::startLiveVideoStreaming(const std::string& peer_id) {
                 cv::VideoCapture cap;
                 
                 if (is_jetson) {
-                    std::cout << "🚀 Detected Jetson platform - using hardware H.264 encoder!" << std::endl;
+                    std::cout << "🚀 Detected Jetson platform - using optimized H.264 encoder!" << std::endl;
                     
-                    // Jetson hardware-accelerated pipeline using nvv4l2h264enc
+                    // Try hardware pipeline first (works on real Jetson with L4T)
                     gst_pipeline = 
                         "v4l2src device=/dev/video0 ! "
                         "video/x-raw,width=640,height=480,framerate=30/1 ! "
@@ -961,8 +961,27 @@ void WebRTCManager::startLiveVideoStreaming(const std::string& peer_id) {
                     cap.open(gst_pipeline, cv::CAP_GSTREAMER);
                     
                     if (!cap.isOpened()) {
-                        std::cout << "⚠️ Hardware pipeline failed, trying software fallback..." << std::endl;
-                        cap.open(0);  // Fallback to regular camera
+                        std::cout << "⚠️ Hardware pipeline failed, trying software H.264 encoder..." << std::endl;
+                        
+                        // Software H.264 encoding pipeline (works in Docker)
+                        gst_pipeline = 
+                            "v4l2src device=/dev/video0 ! "
+                            "video/x-raw,width=640,height=480,framerate=30/1 ! "
+                            "videoconvert ! "
+                            "x264enc tune=zerolatency bitrate=1000 ! "  // Software H.264
+                            "h264parse ! "
+                            "appsink";
+                        
+                        cap.open(gst_pipeline, cv::CAP_GSTREAMER);
+                        
+                        if (!cap.isOpened()) {
+                            std::cout << "⚠️ GStreamer pipeline failed, using regular camera..." << std::endl;
+                            cap.open(0);  // Final fallback to regular camera
+                        } else {
+                            std::cout << "✅ Using software H.264 encoder (x264enc)" << std::endl;
+                        }
+                    } else {
+                        std::cout << "✅ Using hardware H.264 encoder (nvv4l2h264enc)" << std::endl;
                     }
                 } else {
                     // Non-Jetson: try regular camera capture
