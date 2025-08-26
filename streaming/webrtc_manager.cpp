@@ -882,18 +882,11 @@ void WebRTCManager::startLiveVideoStreaming(const std::string& peer_id) {
                                 cv::Mat frame = loadAndResizeImage(image_files[img_index]);
                                 
                                 if (!frame.empty()) {
-                                    // Encode as JPEG (similar to robot_simulator approach)
-                                    std::vector<uchar> jpeg_data;
-                                    std::vector<int> compression_params = {cv::IMWRITE_JPEG_QUALITY, 80};
+                                    // Use the existing H264 frame encoding method for WebRTC compatibility
+                                    sendH264Frame(track, frame);
                                     
-                                    if (cv::imencode(".jpg", frame, jpeg_data, compression_params)) {
-                                        // Send JPEG data directly
-                                        bool sent = track->send(reinterpret_cast<const rtc::byte*>(jpeg_data.data()), jpeg_data.size());
-                                        
-                                        if (frame_count % 10 == 0) { // Log every second
-                                            std::cout << "📤 Frame " << frame_count << ": " << (sent ? "✅ SENT" : "❌ FAILED") 
-                                                     << " (" << jpeg_data.size() << " bytes JPEG)" << std::endl;
-                                        }
+                                    if (frame_count % 10 == 0) { // Log every second
+                                        std::cout << "📤 Frame " << frame_count << ": ✅ SENT (OpenCV Mat -> H264)" << std::endl;
                                     }
                                 }
                             } else {
