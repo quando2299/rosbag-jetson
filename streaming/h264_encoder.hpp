@@ -32,6 +32,9 @@ public:
     // Cleanup
     void cleanup();
     
+    // Filter out problematic NAL units (SEI with timestamps)
+    std::vector<uint8_t> filterNALUnits(const std::vector<uint8_t>& data);
+    
 private:
     AVCodec* codec_;
     AVCodecContext* codec_context_;

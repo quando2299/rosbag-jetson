@@ -48,6 +48,9 @@ bool H264Encoder::initialize(int width, int height, int fps, int bitrate) {
     av_opt_set(codec_context_->priv_data, "profile", "baseline", 0);
     av_opt_set(codec_context_->priv_data, "level", "3.1", 0);
     
+    // CRITICAL: Disable SEI timestamps to prevent RMCS decoder confusion
+    av_opt_set(codec_context_->priv_data, "x264opts", "no-scenecut:no-b-adapt:nal-hrd=none", 0);
+    
     // Important for WebRTC: use annexb format (start codes)
     codec_context_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     
@@ -142,6 +145,9 @@ std::vector<uint8_t> H264Encoder::encode(const cv::Mat& frame) {
         encoded_data.resize(packet_->size);
         std::memcpy(encoded_data.data(), packet_->data, packet_->size);
         
+        // Filter out SEI NAL units to prevent RMCS decoder confusion
+        encoded_data = filterNALUnits(encoded_data);
+        
         // Unref packet for next use
         av_packet_unref(packet_);
         
@@ -228,4 +234,73 @@ void H264Encoder::cleanup() {
     if (codec_context_) {
         avcodec_free_context(&codec_context_);
     }
+}
+
+std::vector<uint8_t> H264Encoder::filterNALUnits(const std::vector<uint8_t>& data) {
+    std::vector<uint8_t> filtered_data;
+    
+    if (data.size() < 4) {
+        return data; // Too small to contain NAL units
+    }
+    
+    const uint8_t* ptr = data.data();
+    size_t remaining = data.size();
+    
+    std::cout << "🔍 Filtering NAL units from " << data.size() << " bytes" << std::endl;
+    
+    while (remaining >= 4) {
+        // Look for start codes (0x00 0x00 0x00 0x01 or 0x00 0x00 0x01)
+        bool found_start = false;
+        size_t start_code_len = 0;
+        
+        if (ptr[0] == 0x00 && ptr[1] == 0x00 && ptr[2] == 0x00 && ptr[3] == 0x01) {
+            found_start = true;
+            start_code_len = 4;
+        } else if (ptr[0] == 0x00 && ptr[1] == 0x00 && ptr[2] == 0x01) {
+            found_start = true;
+            start_code_len = 3;
+        }
+        
+        if (found_start && remaining > start_code_len) {
+            uint8_t nal_type = ptr[start_code_len] & 0x1F;
+            
+            // Find the end of this NAL unit (next start code)
+            size_t nal_end = remaining;
+            for (size_t i = start_code_len + 1; i < remaining - 3; i++) {
+                if ((ptr[i] == 0x00 && ptr[i+1] == 0x00 && ptr[i+2] == 0x00 && ptr[i+3] == 0x01) ||
+                    (ptr[i] == 0x00 && ptr[i+1] == 0x00 && ptr[i+2] == 0x01)) {
+                    nal_end = i;
+                    break;
+                }
+            }
+            
+            // Filter logic: exclude SEI NAL units (type 6)
+            if (nal_type == 6) { // SEI NAL unit - SKIP IT!
+                std::cout << "🚫 Skipping SEI NAL unit (type 6) - " << (nal_end) << " bytes" << std::endl;
+                ptr += nal_end;
+                remaining -= nal_end;
+                continue;
+            } else {
+                // Keep this NAL unit (SPS=7, PPS=8, IDR=5, P=1, etc.)
+                std::cout << "✅ Keeping NAL unit type " << (int)nal_type << " - " << nal_end << " bytes" << std::endl;
+                filtered_data.insert(filtered_data.end(), ptr, ptr + nal_end);
+                ptr += nal_end;
+                remaining -= nal_end;
+            }
+        } else {
+            // No start code found, advance by 1 byte
+            filtered_data.push_back(*ptr);
+            ptr++;
+            remaining--;
+        }
+    }
+    
+    // Add any remaining bytes
+    if (remaining > 0) {
+        filtered_data.insert(filtered_data.end(), ptr, ptr + remaining);
+    }
+    
+    std::cout << "📏 Filtered data: " << data.size() << " -> " << filtered_data.size() << " bytes" << std::endl;
+    
+    return filtered_data;
 }
