@@ -588,7 +588,7 @@ void WebRTCManager::sendH264Frame(std::shared_ptr<rtc::Track> track, const cv::M
         // Initialize H.264 encoder if not already done (like robot_simulator video initialization)
         if (!h264_encoder_) {
             h264_encoder_ = std::make_unique<H264Encoder>();
-            if (!h264_encoder_->initialize(320, 240, 30, 1000000)) { // 1Mbps bitrate
+            if (!h264_encoder_->initialize(320, 240, 15, 300000)) { // 300Kbps bitrate, 15fps
                 std::cerr << "❌ Failed to initialize H.264 encoder" << std::endl;
                 return;
             }
@@ -603,7 +603,6 @@ void WebRTCManager::sendH264Frame(std::shared_ptr<rtc::Track> track, const cv::M
         std::vector<uint8_t> encoded_data = h264_encoder_->encode(resized_frame);
         
         if (!encoded_data.empty()) {
-            // Check track state before sending
             static int frame_count = 0;
             
             if (!track->isOpen()) {
@@ -615,26 +614,41 @@ void WebRTCManager::sendH264Frame(std::shared_ptr<rtc::Track> track, const cv::M
                 return;
             }
             
-            // Send properly encoded H.264 data
+            // Apply frame size limit for RTP packetization (libdatachannel limit)
+            const size_t MAX_FRAME_SIZE = 10000; // 10KB limit for RTP packets
+            
+            if (encoded_data.size() > MAX_FRAME_SIZE) {
+                std::cout << "⚠️  Frame too large for RTP: " << encoded_data.size() 
+                         << " bytes (limit: " << MAX_FRAME_SIZE << "), skipping frame " << frame_count << std::endl;
+                frame_count++;
+                return;
+            }
+            
+            // Send H.264 data with proper timing
             bool success = track->send(reinterpret_cast<const rtc::byte*>(encoded_data.data()), 
                                      encoded_data.size());
             
-            if (success && frame_count % 60 == 0) {
-                std::cout << "✅ Proper H.264 frame sent: " << encoded_data.size() 
-                         << " bytes (frame " << frame_count << ")" << std::endl;
-            } else if (!success) {
-                // More detailed error reporting
+            if (success) {
+                if (frame_count % 60 == 0) {
+                    std::cout << "✅ H.264 frame sent successfully: " << encoded_data.size() 
+                             << " bytes (frame " << frame_count << ")" << std::endl;
+                }
+            } else {
+                // More detailed error reporting with size analysis
                 std::cout << "⚠️  Failed to send H.264 frame " << frame_count 
-                         << " (size: " << encoded_data.size() << " bytes, track open: " 
-                         << (track->isOpen() ? "YES" : "NO") << ")" << std::endl;
+                         << " (size: " << encoded_data.size() << " bytes)" << std::endl;
                 
-                // Debug: Show first few bytes of H.264 data
-                if (frame_count < 5 && encoded_data.size() >= 8) {
-                    printf("   First 8 bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n",
-                           encoded_data[0], encoded_data[1], encoded_data[2], encoded_data[3],
-                           encoded_data[4], encoded_data[5], encoded_data[6], encoded_data[7]);
+                // Analyze frame size distribution
+                if (frame_count < 10) {
+                    std::cout << "   Frame size analysis: ";
+                    if (encoded_data.size() < 1000) std::cout << "SMALL";
+                    else if (encoded_data.size() < 5000) std::cout << "MEDIUM"; 
+                    else if (encoded_data.size() < 15000) std::cout << "LARGE";
+                    else std::cout << "VERY_LARGE";
+                    std::cout << std::endl;
                 }
             }
+            
             frame_count++;
         }
         
