@@ -8,6 +8,7 @@
 #include <signal.h>
 #include <memory>
 #include <mosquitto.h>
+#include <opencv2/opencv.hpp>
 
 #ifdef JSON_ENABLED
 #include <json/json.h>
@@ -22,6 +23,54 @@ static volatile bool keep_running = true;
 void signal_handler(int signal) {
     std::cout << "\nReceived signal " << signal << ". Shutting down gracefully..." << std::endl;
     keep_running = false;
+}
+
+// Function to test camera connectivity at startup
+void test_camera_connectivity() {
+    std::cout << "=== Camera Connectivity Test ===" << std::endl;
+    
+    bool camera_found = false;
+    
+    // Try camera indices 0, 1, 2
+    for (int camera_index = 0; camera_index <= 2; camera_index++) {
+        std::cout << "🔍 Testing camera index " << camera_index << "..." << std::endl;
+        
+        cv::VideoCapture cap(camera_index);
+        
+        if (cap.isOpened()) {
+            // Get camera properties
+            double width = cap.get(cv::CAP_PROP_FRAME_WIDTH);
+            double height = cap.get(cv::CAP_PROP_FRAME_HEIGHT);
+            double fps = cap.get(cv::CAP_PROP_FPS);
+            
+            std::cout << "✅ Camera " << camera_index << " detected!" << std::endl;
+            std::cout << "   Resolution: " << width << "x" << height << std::endl;
+            std::cout << "   FPS: " << fps << std::endl;
+            
+            // Try to capture a test frame
+            cv::Mat frame;
+            if (cap.read(frame) && !frame.empty()) {
+                std::cout << "   📸 Test frame captured successfully (" 
+                         << frame.cols << "x" << frame.rows << ")" << std::endl;
+            } else {
+                std::cout << "   ⚠️  Could not capture test frame" << std::endl;
+            }
+            
+            cap.release();
+            camera_found = true;
+        } else {
+            std::cout << "❌ Camera " << camera_index << " not available" << std::endl;
+        }
+    }
+    
+    if (camera_found) {
+        std::cout << "🎥 Camera system ready for live streaming!" << std::endl;
+    } else {
+        std::cout << "⚠️  No cameras detected. Will use fallback image streaming." << std::endl;
+    }
+    
+    std::cout << "=================================" << std::endl;
+    std::cout << std::endl;
 }
 
 class MQTTClient {
@@ -315,6 +364,9 @@ public:
     void start() {
         signal(SIGINT, signal_handler);
         signal(SIGTERM, signal_handler);
+        
+        // Test camera connectivity first (like robot_simulator camera check)
+        test_camera_connectivity();
         
         std::cout << "Connecting to MQTT broker at " << host << ":" << port << "..." << std::endl;
         
