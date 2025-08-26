@@ -820,22 +820,36 @@ void WebRTCManager::startLiveVideoStreaming(const std::string& peer_id) {
                 int frame_count = 0;
                 const auto frame_duration = std::chrono::milliseconds(33); // 30 FPS (33ms per frame)
                 
-                std::cout << "📹 Generating live H.264 video frames at 30fps..." << std::endl;
+                std::cout << "📹 Sending simple test video data at 5fps..." << std::endl;
                 
-                while (active) {
-                    // Generate a live video frame (simulate camera feed)
-                    auto h264_frame = generateLiveH264Frame(frame_count);
+                while (active && frame_count < 100) { // Limit to 100 frames for testing
+                    // Send very simple test data instead of H264
+                    std::string test_data = "VIDEO_FRAME_" + std::to_string(frame_count) + "_DATA";
                     
-                    if (!h264_frame.empty()) {
-                        sendH264FrameRTP(track, h264_frame, frame_count);
-                        
-                        if (frame_count % 30 == 0) { // Log every second
-                            std::cout << "🎬 Streaming frame " << frame_count << " (size: " << h264_frame.size() << " bytes)" << std::endl;
+                    try {
+                        // Check if track is available and ready
+                        if (track && track->isOpen()) {
+                            // Send simple test data
+                            rtc::binary packet;
+                            for (char c : test_data) {
+                                packet.push_back(static_cast<std::byte>(c));
+                            }
+                            
+                            bool sent = track->send(packet);
+                            
+                            if (frame_count % 5 == 0) { // Log every 5 frames
+                                std::cout << "📤 Frame " << frame_count << ": " << (sent ? "✅ SENT" : "❌ FAILED") 
+                                         << " (" << test_data.length() << " bytes)" << std::endl;
+                            }
+                        } else {
+                            std::cout << "⚠️ Track not ready - Frame " << frame_count << std::endl;
                         }
+                    } catch (const std::exception& e) {
+                        std::cout << "❌ Error sending frame " << frame_count << ": " << e.what() << std::endl;
                     }
                     
                     frame_count++;
-                    std::this_thread::sleep_for(frame_duration);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200)); // 5 fps
                 }
                 
                 std::cout << "✅ Live video streaming stopped (" << frame_count << " frames sent)" << std::endl;
