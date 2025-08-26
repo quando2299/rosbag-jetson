@@ -585,57 +585,83 @@ void WebRTCManager::sendH264Frame(std::shared_ptr<rtc::Track> track, const cv::M
     }
     
     try {
-        // Send synthetic but valid H264 frames that WebRTC can decode
-        // This is a working approach for libdatachannel with H264 tracks
         static int frame_counter = 0;
+        static bool is_jetson_encoder = false;
+        static bool checked_jetson = false;
         
-        // Create valid H264 NAL units similar to what worked before
-        std::vector<uint8_t> h264_frame;
-        
-        // Every 30 frames send keyframe with SPS/PPS
-        bool is_keyframe = (frame_counter % 30 == 0);
-        
-        if (is_keyframe) {
-            // Add 4-byte start code + SPS
-            h264_frame.insert(h264_frame.end(), {0x00, 0x00, 0x00, 0x01});
+        // Check once if we're getting H.264 data from Jetson hardware encoder
+        if (!checked_jetson) {
+            // If frame has only 1 channel and specific size pattern, it's likely H.264 data
+            is_jetson_encoder = (frame.channels() == 1 && frame.type() == CV_8UC1);
+            checked_jetson = true;
             
-            // Valid SPS for 640x480 video
-            std::vector<uint8_t> sps = {
-                0x67, 0x42, 0x00, 0x1E, 0x8D, 0x80, 0x50, 0x05,
-                0xBA, 0x10, 0x00, 0x00, 0x03, 0x00, 0x10, 0x00,
-                0x00, 0x03, 0x03, 0x20, 0xF1, 0x42, 0xA4
-            };
-            h264_frame.insert(h264_frame.end(), sps.begin(), sps.end());
-            
-            // Add 4-byte start code + PPS  
-            h264_frame.insert(h264_frame.end(), {0x00, 0x00, 0x00, 0x01});
-            std::vector<uint8_t> pps = {0x68, 0xCE, 0x3C, 0x80};
-            h264_frame.insert(h264_frame.end(), pps.begin(), pps.end());
-            
-            // Add 4-byte start code + IDR slice
-            h264_frame.insert(h264_frame.end(), {0x00, 0x00, 0x00, 0x01});
-            h264_frame.push_back(0x65); // IDR slice NAL type
-            
-            // Add minimal IDR payload (creates a valid visible frame)
-            for (int i = 0; i < 100; i++) {
-                h264_frame.push_back(0x80 + (i % 16)); // Minimal encoded data
-            }
-        } else {
-            // Add 4-byte start code + P-frame
-            h264_frame.insert(h264_frame.end(), {0x00, 0x00, 0x00, 0x01});
-            h264_frame.push_back(0x61); // P slice NAL type
-            
-            // Add minimal P-frame payload
-            for (int i = 0; i < 50; i++) {
-                h264_frame.push_back(0x40 + (i % 8)); // Minimal encoded data
+            if (is_jetson_encoder) {
+                std::cout << "📹 Detected H.264 encoded frames from Jetson hardware encoder" << std::endl;
             }
         }
         
-        // Send the H264 frame
-        bool success = track->send(reinterpret_cast<const rtc::byte*>(h264_frame.data()), h264_frame.size());
-        
-        if (!success && frame_counter % 30 == 0) {
-            std::cout << "⚠️  Failed to send H264 frame " << frame_counter << std::endl;
+        if (is_jetson_encoder) {
+            // Frame is already H.264 encoded by Jetson hardware encoder!
+            // Just extract the NAL units and send them
+            std::vector<uint8_t> h264_data(frame.data, frame.data + frame.total());
+            
+            // The Jetson encoder already provides proper NAL units with start codes
+            // Just send them directly to libdatachannel
+            bool success = track->send(reinterpret_cast<const rtc::byte*>(h264_data.data()), h264_data.size());
+            
+            if (!success && frame_counter % 30 == 0) {
+                std::cout << "⚠️  Failed to send Jetson H.264 frame " << frame_counter << std::endl;
+            }
+        } else {
+            // Non-Jetson: Send synthetic H.264 for testing
+            // (In production, you'd want to use x264 or another software encoder here)
+            std::vector<uint8_t> h264_frame;
+            
+            // Every 30 frames send keyframe with SPS/PPS
+            bool is_keyframe = (frame_counter % 30 == 0);
+            
+            if (is_keyframe) {
+                // Add 4-byte start code + SPS
+                h264_frame.insert(h264_frame.end(), {0x00, 0x00, 0x00, 0x01});
+                
+                // Valid SPS for 640x480 video
+                std::vector<uint8_t> sps = {
+                    0x67, 0x42, 0x00, 0x1E, 0x8D, 0x80, 0x50, 0x05,
+                    0xBA, 0x10, 0x00, 0x00, 0x03, 0x00, 0x10, 0x00,
+                    0x00, 0x03, 0x03, 0x20, 0xF1, 0x42, 0xA4
+                };
+                h264_frame.insert(h264_frame.end(), sps.begin(), sps.end());
+                
+                // Add 4-byte start code + PPS  
+                h264_frame.insert(h264_frame.end(), {0x00, 0x00, 0x00, 0x01});
+                std::vector<uint8_t> pps = {0x68, 0xCE, 0x3C, 0x80};
+                h264_frame.insert(h264_frame.end(), pps.begin(), pps.end());
+                
+                // Add 4-byte start code + IDR slice
+                h264_frame.insert(h264_frame.end(), {0x00, 0x00, 0x00, 0x01});
+                h264_frame.push_back(0x65); // IDR slice NAL type
+                
+                // Add minimal IDR payload (creates a valid visible frame)
+                for (int i = 0; i < 100; i++) {
+                    h264_frame.push_back(0x80 + (i % 16)); // Minimal encoded data
+                }
+            } else {
+                // Add 4-byte start code + P-frame
+                h264_frame.insert(h264_frame.end(), {0x00, 0x00, 0x00, 0x01});
+                h264_frame.push_back(0x61); // P slice NAL type
+                
+                // Add minimal P-frame payload
+                for (int i = 0; i < 50; i++) {
+                    h264_frame.push_back(0x40 + (i % 8)); // Minimal encoded data
+                }
+            }
+            
+            // Send the H264 frame
+            bool success = track->send(reinterpret_cast<const rtc::byte*>(h264_frame.data()), h264_frame.size());
+            
+            if (!success && frame_counter % 30 == 0) {
+                std::cout << "⚠️  Failed to send synthetic H264 frame " << frame_counter << std::endl;
+            }
         }
         
         frame_counter++;
@@ -902,15 +928,53 @@ void WebRTCManager::startLiveVideoStreaming(const std::string& peer_id) {
                 
                 std::cout << "📹 Starting LIVE camera streaming (like robot_simulator getUserMedia)..." << std::endl;
                 
-                // Initialize REAL camera capture (like robot_simulator's getUserMedia)
-                cv::VideoCapture cap(0);  // Try camera index 0 first
-                if (!cap.isOpened()) {
-                    std::cout << "⚠️ Camera 0 not available, trying camera 1..." << std::endl;
-                    cap.open(1);
+                // Initialize camera with Jetson-optimized GStreamer pipeline
+                // This uses NVIDIA hardware acceleration for H.264 encoding
+                std::string gst_pipeline;
+                
+                // Check if we're on Jetson (has NVIDIA hardware encoder)
+                std::ifstream tegra_check("/proc/device-tree/model");
+                bool is_jetson = false;
+                if (tegra_check.is_open()) {
+                    std::string model;
+                    std::getline(tegra_check, model);
+                    is_jetson = (model.find("Jetson") != std::string::npos || 
+                                model.find("Tegra") != std::string::npos);
+                    tegra_check.close();
                 }
-                if (!cap.isOpened()) {
-                    std::cout << "⚠️ Camera 1 not available, trying camera 2..." << std::endl;
-                    cap.open(2);
+                
+                cv::VideoCapture cap;
+                
+                if (is_jetson) {
+                    std::cout << "🚀 Detected Jetson platform - using hardware H.264 encoder!" << std::endl;
+                    
+                    // Jetson hardware-accelerated pipeline using nvv4l2h264enc
+                    gst_pipeline = 
+                        "v4l2src device=/dev/video0 ! "
+                        "video/x-raw,width=640,height=480,framerate=30/1 ! "
+                        "nvvidconv ! "
+                        "video/x-raw(memory:NVMM) ! "
+                        "nvv4l2h264enc bitrate=1000000 ! "  // 1 Mbps bitrate
+                        "h264parse ! "
+                        "appsink";
+                    
+                    cap.open(gst_pipeline, cv::CAP_GSTREAMER);
+                    
+                    if (!cap.isOpened()) {
+                        std::cout << "⚠️ Hardware pipeline failed, trying software fallback..." << std::endl;
+                        cap.open(0);  // Fallback to regular camera
+                    }
+                } else {
+                    // Non-Jetson: try regular camera capture
+                    cap.open(0);  // Try camera index 0 first
+                    if (!cap.isOpened()) {
+                        std::cout << "⚠️ Camera 0 not available, trying camera 1..." << std::endl;
+                        cap.open(1);
+                    }
+                    if (!cap.isOpened()) {
+                        std::cout << "⚠️ Camera 1 not available, trying camera 2..." << std::endl;
+                        cap.open(2);
+                    }
                 }
                 
                 // Load image files as fallback (declare outside scope)
