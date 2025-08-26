@@ -54,6 +54,9 @@ public:
     // Live video streaming (like robot_simulator camera)
     void startLiveVideoStreaming(const std::string& peer_id);
     
+    // SDP manipulation
+    std::string removeAudioFromSDP(const std::string& sdp);
+    
 private:
     std::string thing_name_;
     PublishCallback publish_callback_;

@@ -182,9 +182,21 @@ void WebRTCManager::setupICEHandling(const std::string& peer_id, std::shared_ptr
         bool has_audio = sdp_answer.find("m=audio") != std::string::npos;
         bool has_video = sdp_answer.find("m=video") != std::string::npos;
         
-        std::cout << "🔍 Generated SDP Answer contains:" << std::endl;
+        std::cout << "🔍 Original SDP Answer contains:" << std::endl;
         std::cout << "   🎵 Audio track: " << (has_audio ? "YES (❌ UNWANTED)" : "NO (✅ CORRECT)") << std::endl;
         std::cout << "   📺 Video track: " << (has_video ? "YES (✅ CORRECT)" : "NO (❌ MISSING)") << std::endl;
+        
+        // Remove audio track from SDP if present
+        if (has_audio) {
+            std::cout << "🔧 Removing audio track from SDP answer..." << std::endl;
+            sdp_answer = removeAudioFromSDP(sdp_answer);
+            
+            // Verify audio was removed
+            bool still_has_audio = sdp_answer.find("m=audio") != std::string::npos;
+            std::cout << "✅ Modified SDP Answer contains:" << std::endl;
+            std::cout << "   🎵 Audio track: " << (still_has_audio ? "YES (❌ FAILED TO REMOVE)" : "NO (✅ REMOVED)") << std::endl;
+            std::cout << "   📺 Video track: YES (✅ KEPT)" << std::endl;
+        }
         
         std::cout << "🔍 DEBUG: Generated SDP Answer:" << std::endl;
         std::cout << "--- SDP START ---" << std::endl;
@@ -1268,6 +1280,39 @@ void WebRTCManager::sendNALUnit(std::shared_ptr<rtc::Track> track, const std::ve
     } catch (const std::exception& e) {
         std::cerr << "❌ Error sending RTP packet: " << e.what() << std::endl;
     }
+}
+
+std::string WebRTCManager::removeAudioFromSDP(const std::string& sdp) {
+    std::string result;
+    std::istringstream stream(sdp);
+    std::string line;
+    bool in_audio_section = false;
+    
+    while (std::getline(stream, line)) {
+        // Check if this is the start of an audio media section
+        if (line.find("m=audio") == 0) {
+            in_audio_section = true;
+            std::cout << "🔧 Skipping audio media line: " << line << std::endl;
+            continue;
+        }
+        
+        // Check if this is the start of a new media section (video or other)
+        if (line.find("m=") == 0 && line.find("m=audio") != 0) {
+            in_audio_section = false;
+            std::cout << "📺 Keeping media line: " << line << std::endl;
+        }
+        
+        // Skip lines that are part of the audio section
+        if (in_audio_section) {
+            std::cout << "🔧 Skipping audio attribute: " << line << std::endl;
+            continue;
+        }
+        
+        // Keep all other lines
+        result += line + "\r\n";
+    }
+    
+    return result;
 }
 
 #endif
