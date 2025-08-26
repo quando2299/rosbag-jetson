@@ -603,16 +603,37 @@ void WebRTCManager::sendH264Frame(std::shared_ptr<rtc::Track> track, const cv::M
         std::vector<uint8_t> encoded_data = h264_encoder_->encode(resized_frame);
         
         if (!encoded_data.empty()) {
+            // Check track state before sending
+            static int frame_count = 0;
+            
+            if (!track->isOpen()) {
+                if (frame_count % 30 == 0) {
+                    std::cout << "⏳ Track not open yet, frame " << frame_count 
+                              << " (encoded: " << encoded_data.size() << " bytes)" << std::endl;
+                }
+                frame_count++;
+                return;
+            }
+            
             // Send properly encoded H.264 data
             bool success = track->send(reinterpret_cast<const rtc::byte*>(encoded_data.data()), 
                                      encoded_data.size());
             
-            static int frame_count = 0;
             if (success && frame_count % 60 == 0) {
                 std::cout << "✅ Proper H.264 frame sent: " << encoded_data.size() 
                          << " bytes (frame " << frame_count << ")" << std::endl;
             } else if (!success) {
-                std::cout << "⚠️  Failed to send H.264 frame " << frame_count << std::endl;
+                // More detailed error reporting
+                std::cout << "⚠️  Failed to send H.264 frame " << frame_count 
+                         << " (size: " << encoded_data.size() << " bytes, track open: " 
+                         << (track->isOpen() ? "YES" : "NO") << ")" << std::endl;
+                
+                // Debug: Show first few bytes of H.264 data
+                if (frame_count < 5 && encoded_data.size() >= 8) {
+                    printf("   First 8 bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                           encoded_data[0], encoded_data[1], encoded_data[2], encoded_data[3],
+                           encoded_data[4], encoded_data[5], encoded_data[6], encoded_data[7]);
+                }
             }
             frame_count++;
         }
