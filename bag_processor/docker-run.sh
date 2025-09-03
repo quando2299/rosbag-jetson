@@ -57,13 +57,50 @@ if [ $? -eq 0 ]; then
     echo ""
     echo "✅ Container finished successfully!"
     
-    # Find the timestamped directory that was created
-    TIMESTAMP_DIR=$(find "$CURRENT_DIR" -name "extracted_images_*" -type d | head -1)
+    # Find the latest timestamped directory that was created
+    TIMESTAMP_DIR=$(find "$CURRENT_DIR" -name "extracted_images_*" -type d | sort -r | head -1)
     if [ -n "$TIMESTAMP_DIR" ]; then
         echo "Check extracted images in: $TIMESTAMP_DIR"
         echo ""
         echo "Image count per camera:"
         find "$TIMESTAMP_DIR" -name "*.jpg" | cut -d'/' -f2 | sort | uniq -c 2>/dev/null || echo "No images found or directory structure different"
+        
+        # Extract datetime from directory name
+        DATETIME=$(basename "$TIMESTAMP_DIR" | sed 's/extracted_images_//')
+        echo ""
+        echo "🎥 Processing MP4 files to H264 format..."
+        
+        # Process each MP4 file found in the extracted directory
+        for MP4_FILE in "$TIMESTAMP_DIR"/*.mp4; do
+            # Check if the glob matched any files
+            if [ ! -e "$MP4_FILE" ]; then
+                echo "No MP4 files found in $TIMESTAMP_DIR"
+                break
+            fi
+            
+            # Get video name without extension
+            VIDEO_NAME=$(basename "$MP4_FILE" .mp4)
+            OUTPUT_DIR="h264/${DATETIME}/${VIDEO_NAME}"
+            
+            echo ""
+            echo "Processing: $VIDEO_NAME"
+            echo "  Input: $MP4_FILE"
+            echo "  Output: $OUTPUT_DIR"
+            
+            # Run the H264 generation script
+            python3 "$CURRENT_DIR/generate_h264.py" -i "$MP4_FILE" -f 30 -o "$OUTPUT_DIR"
+            
+            if [ $? -eq 0 ]; then
+                echo "✅ Successfully processed $VIDEO_NAME"
+                H264_COUNT=$(find "$CURRENT_DIR/$OUTPUT_DIR" -name "*.h264" 2>/dev/null | wc -l)
+                echo "  Generated $H264_COUNT H264 samples"
+            else
+                echo "❌ Failed to process $VIDEO_NAME"
+            fi
+        done
+        
+        echo ""
+        echo "🎉 H264 processing complete!"
     else
         echo "Timestamped directory not found in $CURRENT_DIR"
         ls -la "$CURRENT_DIR"/extracted_images_* 2>/dev/null || echo "No extracted_images_* directories found"
