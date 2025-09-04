@@ -3,3 +3,4 @@ camera_data_2025-07-08-16-29-06_0.bag
 bag_processor/extracted_images*
 streaming/images
 frontend
+bag_processor/h264
