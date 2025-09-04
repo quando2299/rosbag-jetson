@@ -276,7 +276,23 @@ private:
         // Follow EXACT pattern from libdatachannel example
         pc->onStateChange([this, peer_id](PeerConnection::State state) {
             cout << "State: " << state << endl;
-            if (state == PeerConnection::State::Disconnected ||
+            if (state == PeerConnection::State::Connected) {
+                cout << "CONNECTED! Checking track state..." << endl;
+                auto client_it = clients.find(peer_id);
+                if (client_it != clients.end() && client_it->second->video.has_value()) {
+                    auto track = client_it->second->video.value()->track;
+                    cout << "Video track isOpen: " << (track->isOpen() ? "YES" : "NO") << endl;
+                    
+                    if (track->isOpen()) {
+                        cout << "Track already open, forcing stream start!" << endl;
+                        streaming_active[peer_id] = true;
+                        if (streaming_threads.find(peer_id) != streaming_threads.end() && streaming_threads[peer_id].joinable()) {
+                            streaming_threads[peer_id].join();
+                        }
+                        streaming_threads[peer_id] = thread(&MQTTWebRTCClient::stream_h264_to_peer, this, peer_id);
+                    }
+                }
+            } else if (state == PeerConnection::State::Disconnected ||
                 state == PeerConnection::State::Failed ||
                 state == PeerConnection::State::Closed) {
                 // remove disconnected client
@@ -301,9 +317,15 @@ private:
             local_candidates[peer_id].push_back(string(candidate));
         });
 
-        // ONLY ADD VIDEO TRACK - no audio as requested
+        // ONLY ADD VIDEO TRACK - no audio as requested  
         client->video = addVideo(pc, 96, 1, "video-stream", "stream1", [this, peer_id, wc = make_weak_ptr(client)]() {
             cout << "Video from " << peer_id << " opened" << endl;
+            
+            // Send initial NALUs immediately like libdatachannel example
+            if (auto c = wc.lock() && c->video.has_value()) {
+                sendInitialNalus(c->video.value());
+            }
+            
             // Start streaming immediately when track opens
             streaming_active[peer_id] = true;
             if (streaming_threads.find(peer_id) != streaming_threads.end() && streaming_threads[peer_id].joinable()) {
