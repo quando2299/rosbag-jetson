@@ -322,8 +322,10 @@ private:
             cout << "Video from " << peer_id << " opened" << endl;
             
             // Send initial NALUs immediately like libdatachannel example
-            if (auto c = wc.lock() && c->video.has_value()) {
-                sendInitialNalus(c->video.value());
+            if (auto c = wc.lock()) {
+                if (c->video.has_value()) {
+                    sendInitialNalus(c->video.value());
+                }
             }
             
             // Start streaming immediately when track opens
