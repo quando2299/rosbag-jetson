@@ -317,7 +317,13 @@ private:
             local_candidates[peer_id].push_back(string(candidate));
         });
 
-        // ONLY ADD VIDEO TRACK - no audio as requested  
+        // ADD BOTH AUDIO AND VIDEO for proper negotiation (but only stream video)
+        // Add audio track first (dummy - no data sent)
+        client->audio = addAudio(pc, 111, 2, "audio-stream", "stream1", [peer_id]() {
+            cout << "Audio from " << peer_id << " opened (dummy)" << endl;
+        });
+        
+        // Add video track second  
         client->video = addVideo(pc, 96, 1, "video-stream", "stream1", [this, peer_id, wc = make_weak_ptr(client)]() {
             cout << "Video from " << peer_id << " opened" << endl;
             
@@ -360,13 +366,6 @@ private:
                 }
             }
             
-            // Add dummy audio track if browser expects it
-            if (hasAudio) {
-                auto audioTrack = addAudio(pc, 111, 2, "audio-stream", "stream1", [peer_id]() {
-                    cout << "Audio from " << peer_id << " opened (dummy)" << endl;
-                });
-                client->audio = audioTrack;
-            }
         }
 
         pc->setLocalDescription();
