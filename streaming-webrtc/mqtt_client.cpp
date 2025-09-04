@@ -12,11 +12,20 @@
 #include <mosquitto.h>
 #include <json/json.h>
 #include <rtc/rtc.hpp>
+#include <rtc/h264rtppacketizer.hpp>
+#include <rtc/rtppacketizationconfig.hpp>
+#include <rtc/rtcpsrreporter.hpp>
+#include <rtc/rtcpnackresponder.hpp>
+#include <rtc/nalunit.hpp>
 #include "h264fileparser.hpp"
+#include "helpers.hpp"
 #include <signal.h>
 
 using namespace std;
 using namespace rtc;
+using namespace std::chrono;
+
+template <class T> weak_ptr<T> make_weak_ptr(shared_ptr<T> ptr) { return ptr; }
 
 class MQTTWebRTCClient {
 private:
@@ -31,9 +40,8 @@ private:
     // MQTT client
     struct mosquitto* mosq = nullptr;
     
-    // WebRTC connections
-    map<string, shared_ptr<PeerConnection>> peer_connections;
-    map<string, shared_ptr<Track>> video_tracks;
+    // WebRTC connections - using Client structure like the working example
+    map<string, shared_ptr<Client>> clients;
     map<string, atomic<bool>> streaming_active;
     map<string, thread> streaming_threads;
     map<string, vector<string>> local_candidates; // Store local candidates per peer
@@ -89,13 +97,14 @@ private:
     void stream_h264_to_peer(const string& peer_id) {
         cout << "[Stream] Starting H264 streaming for peer: " << peer_id << endl;
         
-        auto track_it = video_tracks.find(peer_id);
-        if (track_it == video_tracks.end()) {
+        auto client_it = clients.find(peer_id);
+        if (client_it == clients.end() || !client_it->second->video.has_value()) {
             cerr << "[Stream] No video track found for peer: " << peer_id << endl;
             return;
         }
         
-        auto track = track_it->second;
+        auto trackData = client_it->second->video.value();
+        auto track = trackData->track;
         
         if (!h264_parser) {
             cerr << "[Stream] H264 parser not initialized" << endl;
@@ -105,29 +114,19 @@ private:
         streaming_active[peer_id] = true;
         uint32_t frame_count = 0;
         
-        // Send initial NALU units (SPS/PPS/IDR)
-        try {
-            auto initial_nalus = h264_parser->initialNALUS();
-            if (!initial_nalus.empty()) {
-                track->send(initial_nalus);
-                cout << "[Stream] Sent initial NALUs (" << initial_nalus.size() << " bytes) to " << peer_id << endl;
-            }
-        } catch (const exception& e) {
-            cerr << "[Stream] Error sending initial NALUs: " << e.what() << endl;
-        }
-        
-        while (streaming_active[peer_id] && peer_connections.find(peer_id) != peer_connections.end()) {
+        while (streaming_active[peer_id] && clients.find(peer_id) != clients.end()) {
             try {
                 // Get next H264 sample
                 auto sample = h264_parser->getSample();
+                uint64_t sampleTime = h264_parser->getSampleTime_us();
                 
                 if (frame_count % 30 == 0) {  // Log every second at 30fps
                     cout << "[Stream] Frame " << frame_count << " sample size: " << sample.size() << " bytes" << endl;
                 }
                 
                 if (!sample.empty()) {
-                    // Send frame
-                    track->send(sample);
+                    // Send frame with proper timestamp like the working example
+                    track->sendFrame(sample, chrono::duration<double, micro>(sampleTime));
                     
                     if (frame_count % 30 == 0) {  // Log every second at 30fps
                         cout << "[Stream] Sent frame " << frame_count << " (" << sample.size() << " bytes) to " << peer_id << endl;
@@ -155,76 +154,197 @@ private:
         streaming_active[peer_id] = false;
     }
     
+    shared_ptr<ClientTrackData> addVideo(shared_ptr<PeerConnection> pc, uint8_t payloadType, uint32_t ssrc, 
+                                const string& cname, const string& msid, 
+                                function<void()> onOpen) {
+        auto video = Description::Video(cname);
+        video.addH264Codec(payloadType);
+        video.addSSRC(ssrc, cname, msid, cname);
+        auto track = pc->addTrack(video);
+        cout << "[DEBUG] Adding video track with PT=" << (int)payloadType << " SSRC=" << ssrc << endl;
+        
+        // create RTP configuration
+        auto rtpConfig = make_shared<RtpPacketizationConfig>(ssrc, cname, payloadType, H264RtpPacketizer::ClockRate);
+        // create packetizer
+        auto packetizer = make_shared<H264RtpPacketizer>(NalUnit::Separator::Length, rtpConfig);
+        // add RTCP SR handler
+        auto srReporter = make_shared<RtcpSrReporter>(rtpConfig);
+        packetizer->addToChain(srReporter);
+        // add RTCP NACK handler
+        auto nackResponder = make_shared<RtcpNackResponder>();
+        packetizer->addToChain(nackResponder);
+        // set handler
+        track->setMediaHandler(packetizer);
+        track->onOpen([onOpen]() {
+            cout << "[DEBUG] Video track onOpen callback triggered!" << endl;
+            onOpen();
+        });
+        auto trackData = make_shared<ClientTrackData>(track, srReporter);
+        
+        return trackData;
+    }
+    
+    shared_ptr<ClientTrackData> addAudio(shared_ptr<PeerConnection> pc, uint8_t payloadType, uint32_t ssrc,
+                               const string& cname, const string& msid,
+                               function<void()> onOpen) {
+        auto audio = Description::Audio(cname);
+        audio.addOpusCodec(payloadType);
+        audio.addSSRC(ssrc, cname, msid, cname);
+        audio.setDirection(Description::Direction::SendOnly);  // We only send audio
+        auto track = pc->addTrack(audio);
+        cout << "[DEBUG] Adding audio track with PT=" << (int)payloadType << " SSRC=" << ssrc << endl;
+        
+        // create RTP configuration
+        auto rtpConfig = make_shared<RtpPacketizationConfig>(ssrc, cname, payloadType, OpusRtpPacketizer::DefaultClockRate);
+        // create packetizer
+        auto packetizer = make_shared<OpusRtpPacketizer>(rtpConfig);
+        // add RTCP SR handler
+        auto srReporter = make_shared<RtcpSrReporter>(rtpConfig);
+        packetizer->addToChain(srReporter);
+        // add RTCP NACK handler
+        auto nackResponder = make_shared<RtcpNackResponder>();
+        packetizer->addToChain(nackResponder);
+        // set handler
+        track->setMediaHandler(packetizer);
+        track->onOpen([onOpen]() {
+            cout << "[DEBUG] Audio track onOpen callback triggered!" << endl;
+            onOpen();
+        });
+        auto trackData = make_shared<ClientTrackData>(track, srReporter);
+        
+        return trackData;
+    }
+    
+    void sendInitialNalus(shared_ptr<ClientTrackData> video) {
+        if (!h264_parser || !video) return;
+        
+        auto initialNalus = h264_parser->initialNALUS();
+        if (!initialNalus.empty()) {
+            // Send initial NAL units with proper timestamp handling like the working example
+            const double frameDuration_s = double(h264_parser->getSampleDuration_us()) / (1000 * 1000);
+            const uint32_t frameTimestampDuration = video->sender->rtpConfig->secondsToTimestamp(frameDuration_s);
+            video->sender->rtpConfig->timestamp = video->sender->rtpConfig->startTimestamp - frameTimestampDuration * 2;
+            video->track->send(initialNalus);
+            video->sender->rtpConfig->timestamp += frameTimestampDuration;
+            // Send initial NAL units again to start stream in firefox browser
+            video->track->send(initialNalus);
+            cout << "[Stream] Sent initial NALUs (" << initialNalus.size() << " bytes)" << endl;
+        }
+    }
+    
+    // Add client to stream - similar to the working example
+    void addToStream(shared_ptr<Client> client, bool isAddingVideo, const string& peer_id) {
+        if (client->getState() == Client::State::Waiting) {
+            client->setState(isAddingVideo ? Client::State::WaitingForAudio : Client::State::WaitingForVideo);
+        } else if ((client->getState() == Client::State::WaitingForAudio && !isAddingVideo)
+                   || (client->getState() == Client::State::WaitingForVideo && isAddingVideo)) {
+
+            // Audio and video tracks are collected now
+            assert(client->video.has_value() && client->audio.has_value());
+            auto video = client->video.value();
+
+            // Send initial NALUs when both tracks are ready
+            sendInitialNalus(video);
+
+            client->setState(Client::State::Ready);
+        }
+        if (client->getState() == Client::State::Ready) {
+            // Start streaming now that client is ready
+            streaming_active[peer_id] = true;
+            if (streaming_threads.find(peer_id) != streaming_threads.end() && streaming_threads[peer_id].joinable()) {
+                streaming_threads[peer_id].join();
+            }
+            streaming_threads[peer_id] = thread(&MQTTWebRTCClient::stream_h264_to_peer, this, peer_id);
+            cout << "[WebRTC] Started streaming for client " << peer_id << " in Ready state" << endl;
+        }
+    }
+    
     void create_peer_connection(const string& peer_id, const string& offer_sdp) {
         cout << "[WebRTC] Creating peer connection for: " << peer_id << endl;
         
-        // Configure WebRTC
+        // Configure WebRTC exactly like the working example
         Configuration config;
-        config.iceServers.emplace_back("stun:stun.l.google.com:19302");
+        string stunServer = "stun:stun.l.google.com:19302";
+        cout << "STUN server is " << stunServer << endl;
+        config.iceServers.emplace_back(stunServer);
         config.disableAutoNegotiation = true;
         
         auto pc = make_shared<PeerConnection>(config);
-        peer_connections[peer_id] = pc;
-        
-        // Add video track
-        auto video = Description::Video("video-stream");
-        video.addH264Codec(102, "profile-level-id=42c015;packetization-mode=1");
-        video.addSSRC(1, "video-stream", "stream1", "video");
-        auto track = pc->addTrack(video);
-        
-        // Configure RTP
-        auto rtpConfig = make_shared<RtpPacketizationConfig>(1, "video", 102, 90000);
-        auto packetizer = make_shared<H264RtpPacketizer>(H264RtpPacketizer::Separator::Length, rtpConfig);
-        track->setMediaHandler(packetizer);
-        
-        video_tracks[peer_id] = track;
-        
-        // Handle state changes
+        auto client = make_shared<Client>(pc);
+        clients[peer_id] = client;
+
+        // Follow EXACT pattern from libdatachannel example
         pc->onStateChange([this, peer_id](PeerConnection::State state) {
-            cout << "[WebRTC] State for " << peer_id << ": " << static_cast<int>(state) << endl;
-            
-            if (state == PeerConnection::State::Connected) {
-                // Start streaming in a separate thread
-                if (streaming_threads.find(peer_id) != streaming_threads.end() && streaming_threads[peer_id].joinable()) {
-                    streaming_threads[peer_id].join();
-                }
-                streaming_threads[peer_id] = thread(&MQTTWebRTCClient::stream_h264_to_peer, this, peer_id);
-            } else if (state == PeerConnection::State::Disconnected || 
-                      state == PeerConnection::State::Failed ||
-                      state == PeerConnection::State::Closed) {
-                // Stop streaming and cleanup
-                streaming_active[peer_id] = false;
-                if (streaming_threads.find(peer_id) != streaming_threads.end() && streaming_threads[peer_id].joinable()) {
-                    streaming_threads[peer_id].join();
-                }
-                peer_connections.erase(peer_id);
-                video_tracks.erase(peer_id);
+            cout << "State: " << state << endl;
+            if (state == PeerConnection::State::Disconnected ||
+                state == PeerConnection::State::Failed ||
+                state == PeerConnection::State::Closed) {
+                // remove disconnected client
+                clients.erase(peer_id);
             }
         });
-        
-        // Handle gathering state
-        pc->onGatheringStateChange([this, peer_id, pc](PeerConnection::GatheringState state) {
-            cout << "[WebRTC] Gathering state for " << peer_id << ": " << static_cast<int>(state) << endl;
-            
+
+        pc->onGatheringStateChange([this, wpc = make_weak_ptr(pc), peer_id](PeerConnection::GatheringState state) {
+            cout << "Gathering State: " << state << endl;
             if (state == PeerConnection::GatheringState::Complete) {
-                auto desc = pc->localDescription();
-                if (desc) {
-                    // Send answer as raw SDP string (not JSON)
-                    string sdp_string = string(*desc);
+                if(auto pc = wpc.lock()) {
+                    auto description = pc->localDescription();
                     string topic = thing_name + "/robot-control/" + peer_id + "/answer";
-                    mqtt_publish(topic, sdp_string);
+                    mqtt_publish(topic, string(description.value()));
                 }
             }
         });
-        
+
         // Handle local candidates - store them for later use
         pc->onLocalCandidate([this, peer_id](Candidate candidate) {
-            cout << "[WebRTC] Generated local candidate for " << peer_id << endl;
+            cout << "Generated local candidate for " << peer_id << endl;
             local_candidates[peer_id].push_back(string(candidate));
         });
-        
-        // Set remote description and create answer
-        pc->setRemoteDescription(Description(offer_sdp, "offer"));
+
+        // ONLY ADD VIDEO TRACK - no audio as requested
+        client->video = addVideo(pc, 96, 1, "video-stream", "stream1", [this, peer_id, wc = make_weak_ptr(client)]() {
+            cout << "Video from " << peer_id << " opened" << endl;
+            // Start streaming immediately when track opens
+            streaming_active[peer_id] = true;
+            if (streaming_threads.find(peer_id) != streaming_threads.end() && streaming_threads[peer_id].joinable()) {
+                streaming_threads[peer_id].join();
+            }
+            streaming_threads[peer_id] = thread(&MQTTWebRTCClient::stream_h264_to_peer, this, peer_id);
+        });
+
+        auto dc = pc->createDataChannel("ping-pong");
+        dc->onOpen([peer_id]() {
+            cout << "DataChannel opened for " << peer_id << endl;
+        });
+        client->dataChannel = dc;
+
+        // Set remote description from the offer FIRST
+        if (!offer_sdp.empty()) {
+            Description offer(offer_sdp, "offer");
+            pc->setRemoteDescription(offer);
+            
+            // Check what media types are in the offer and add matching tracks
+            bool hasAudio = false, hasVideo = false;
+            for (int i = 0; i < offer.mediaCount(); i++) {
+                auto media = offer.media(i);
+                if (holds_alternative<Description::Media*>(media)) {
+                    auto m = get<Description::Media*>(media);
+                    if (m) {
+                        if (m->type() == "audio") hasAudio = true;
+                        if (m->type() == "video") hasVideo = true;
+                    }
+                }
+            }
+            
+            // Add dummy audio track if browser expects it
+            if (hasAudio) {
+                auto audioTrack = addAudio(pc, 111, 2, "audio-stream", "stream1", [peer_id]() {
+                    cout << "Audio from " << peer_id << " opened (dummy)" << endl;
+                });
+                client->audio = audioTrack;
+            }
+        }
+
         pc->setLocalDescription();
     }
     
@@ -262,6 +382,7 @@ private:
         if (topic.find("/offer") != string::npos) {
             cout << "[MQTT] Processing offer from peer: " << peer_id << endl;
             
+            // Extract SDP from payload
             string offer_sdp;
             if (payload[0] == '{') {
                 // JSON format
@@ -276,6 +397,7 @@ private:
             }
             
             if (!offer_sdp.empty()) {
+                // Create peer connection with the offer
                 create_peer_connection(peer_id, offer_sdp);
             }
         }
@@ -283,15 +405,15 @@ private:
         else if (topic.find("/candidate/robot") != string::npos) {
             cout << "[MQTT] Processing ICE candidates for peer: " << peer_id << endl;
             
-            auto pc_it = peer_connections.find(peer_id);
-            if (pc_it != peer_connections.end()) {
+            auto client_it = clients.find(peer_id);
+            if (client_it != clients.end()) {
                 Json::Value root;
                 Json::Reader reader;
                 if (reader.parse(payload, root) && root.isArray()) {
                     for (const auto& ice : root) {
                         if (ice.isMember("candidate")) {
                             string candidate_str = ice["candidate"].asString();
-                            pc_it->second->addRemoteCandidate(Candidate(candidate_str));
+                            client_it->second->peerConnection->addRemoteCandidate(Candidate(candidate_str));
                             cout << "[WebRTC] Added remote ICE candidate for " << peer_id << endl;
                         }
                     }

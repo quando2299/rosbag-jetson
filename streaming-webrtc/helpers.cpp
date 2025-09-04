@@ -11,6 +11,20 @@
 #include <sys/time.h>
 #include <cstddef>
 
+ClientTrackData::ClientTrackData(std::shared_ptr<rtc::Track> track, std::shared_ptr<rtc::RtcpSrReporter> sender) : track(track), sender(sender) {}
+
+void Client::setState(State state) {
+    std::unique_lock<std::mutex> lock(_mutex);
+    this->state = state;
+}
+
+Client::State Client::getState() {
+    std::unique_lock<std::mutex> lock(_mutex);
+    return state;
+}
+
+ClientTrack::ClientTrack(std::string id, std::shared_ptr<ClientTrackData> trackData) : id(id), trackData(trackData) {}
+
 uint64_t currentTimeInMicroSeconds() {
 	struct timeval time;
 	gettimeofday(&time, NULL);

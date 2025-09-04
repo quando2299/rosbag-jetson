@@ -1,4 +1,4 @@
-FROM ubuntu:20.04
+FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -22,15 +22,11 @@ RUN apt-get update && apt-get install -y \
     libsrtp2-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Build and install libdatachannel
-RUN git clone --depth 1 --branch v0.20.0 https://github.com/paullouisageneau/libdatachannel.git /tmp/libdatachannel && \
+# Build and install libdatachannel (latest version)
+RUN git clone --depth 1 https://github.com/paullouisageneau/libdatachannel.git /tmp/libdatachannel && \
     cd /tmp/libdatachannel && \
     git submodule update --init --recursive --depth 1 && \
-    cmake -B build \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DNO_EXAMPLES=1 \
-        -DNO_TESTS=1 \
-        -DUSE_NICE=1 && \
+    cmake -B build -DUSE_GNUTLS=0 -DUSE_NICE=0 -DCMAKE_BUILD_TYPE=Release && \
     cmake --build build -j2 && \
     cmake --install build && \
     ldconfig && \
